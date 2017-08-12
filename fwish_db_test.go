@@ -25,9 +25,15 @@ const testSchemaName = "__fwishtest"
 
 // Very basic functional test
 func TestBasic(t *testing.T) {
-	mg, err := fwish.NewMigrator(
-		"./test-data/basic", "372ce18d-02a2-4cb1-828a-bb470f02fe6e",
-	)
+	mg, err := fwish.NewMigrator("372ce18d-02a2-4cb1-828a-bb470f02fe6e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := fwish.NewSQLSource("./test-data/basic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mg.AddSource(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +62,18 @@ func TestBasic(t *testing.T) {
 
 // Using sqlx instead of stdlib's sql package.
 func TestBasicSQLX(t *testing.T) {
-	mg, err := fwish.NewMigrator(
-		"./test-data/basic", "372ce18d-02a2-4cb1-828a-bb470f02fe6e",
-	)
+	mg, err := fwish.NewMigrator("372ce18d-02a2-4cb1-828a-bb470f02fe6e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := fwish.NewSQLSource("./test-data/basic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mg.AddSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The only difference
 	db, err := sqlx.Open("postgres", dsn)
@@ -84,17 +99,29 @@ func TestBasicSQLX(t *testing.T) {
 
 func TestSchemaID(t *testing.T) {
 	// Match: source-program
-	_, err := fwish.NewMigrator(
-		"./test-data/basic", "372ce18d-02a2-4cb1-828a-bb470f02fe6e",
-	)
+	mg, err := fwish.NewMigrator("372ce18d-02a2-4cb1-828a-bb470f02fe6e")
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
+	}
+	src, err := fwish.NewSQLSource("./test-data/basic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mg.AddSource(src)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Mismatch: source-program
-	_, err = fwish.NewMigrator(
-		"./test-data/basic", "bad-id",
-	)
+	mg, err = fwish.NewMigrator("myapp.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err = fwish.NewSQLSource("./test-data/basic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mg.AddSource(src)
 	if err == nil {
 		t.Error("error expected")
 	} else if !strings.Contains(err.Error(), "schema ID mismatch") {

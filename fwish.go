@@ -32,9 +32,17 @@ type LogOutputer interface {
 	Output(calldepth int, s string) error
 }
 
+//TODO: interface so the source can lazy-checksum
+type SourceMigration struct {
+	Name     string
+	Checksum uint32
+}
+
 type Source interface {
 	SchemaID() string
 	SchemaName() string
+	Migrations() ([]SourceMigration, error)
+	ExecuteMigration(db DB, migration SourceMigration) error //TODO: use context and Tx
 }
 
 var (
@@ -45,51 +53,186 @@ var (
 
 //TODO: dialect / engine etc.
 type sourceMeta struct {
-	ID   string
-	Name string
-}
-
-//TODO: generalize or abstract this
-type sourceFile struct {
-	version     string
-	label       string // From the second part of the filename
-	filename    string // The full filename
-	description string // loaded from the first line comment if any
-	checksum    uint32
+	ID         string
+	Name       string
+	FileSuffix string
 }
 
 type sqlSource struct {
-	url             string
-	scanned         bool
-	files           map[string]sourceFile
-	sortedFilenames []string //TODO: move to Migrator (and not only the file names)
+	schemaID   string
+	schemaName string
+	url        string
+	fileSuffix string
+	scanned    bool
+	files      []SourceMigration
 }
 
-func (s *sqlSource) Meta() (*sourceMeta, error) {
+func NewSQLSource(sourceURL string) (Source, error) {
+	src := sqlSource{url: sourceURL}
+	if err := src.loadMeta(); err != nil {
+		return nil, err
+	}
+	return &src, nil
+}
+
+func (s *sqlSource) loadMeta() error {
 	//TODO: might want to stream the content
 	fd, err := ioutil.ReadFile(
 		filepath.Join(s.url, "fwish.yaml"),
 	)
 	if err != nil {
 		if _, ok := err.(*os.PathError); !ok {
-			return nil, errors.Wrap(err, "fwish: error opening source meta file")
+			return errors.Wrap(err, "fwish: error opening source meta file")
 		}
 		// Try other name
 		fd, err = ioutil.ReadFile(
 			filepath.Join(s.url, "schema.yaml"),
 		)
 		if err != nil {
-			return nil, errors.Wrap(err, "fwish: unable to open any source meta file")
+			return errors.Wrap(err, "fwish: unable to open any source meta file")
 		}
 	}
 
 	//TODO: cache
 	meta := sourceMeta{}
 	if err := yaml.Unmarshal(fd, &meta); err != nil {
-		return nil, errors.Wrap(err, "fwish: unable to load source meta file")
+		return errors.Wrap(err, "fwish: unable to load source meta file")
 	}
 
-	return &meta, nil
+	s.schemaID = meta.ID
+	s.schemaName = meta.Name
+
+	return nil
+}
+
+func (s *sqlSource) SchemaID() string {
+	return s.schemaID
+}
+
+func (s *sqlSource) SchemaName() string {
+	return s.schemaName
+}
+
+func (s *sqlSource) Migrations() ([]SourceMigration, error) {
+	if !s.scanned {
+		_, err := s.scanSourceDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.files, nil
+}
+
+func (s *sqlSource) ExecuteMigration(db DB, sm SourceMigration) error {
+	//TODO: ensure that the it's our migration
+	//TODO: load all the content, checksum, then execute
+	fh, err := os.Open(filepath.Join(s.url, sm.Name))
+	if err != nil {
+		panic(err)
+	}
+	defer fh.Close()
+
+	var script string
+	scanner := bufio.NewScanner(fh)
+	scanner.Split(bufio.ScanLines)
+
+	ck := crc32.NewIEEE()
+	for scanner.Scan() {
+		ck.Write(scanner.Bytes())
+		script += scanner.Text() + "\n"
+	}
+
+	if sm.Checksum != ck.Sum32() {
+		//TODO: more informative message
+		return errors.Errorf("fwish: bad source checksum %q", sm.Name)
+	}
+
+	_, err = db.Exec(script)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// returns the number of files?
+func (s *sqlSource) scanSourceDir() (numFiles int, err error) {
+	// We might want to make these configurable
+	sfx := s.fileSuffix
+	if sfx == "" {
+		sfx = ".sql"
+	}
+	ignorePrefix := "_"
+	versionSep := "__"
+
+	numFiles = 0
+	s.files = nil
+
+	fl, err := ioutil.ReadDir(s.url)
+	if err != nil {
+		return 0, err //TODO: handle no such file (and wrap the error)
+	}
+
+	for _, entry := range fl {
+		fname := entry.Name()
+
+		if strings.HasPrefix(fname, ignorePrefix) {
+			continue
+		}
+		if !strings.HasSuffix(fname, sfx) {
+			continue
+		}
+
+		if idx := strings.Index(fname, versionSep); idx > 0 {
+			// vstr := fname[:idx]
+			// //TODO: replace the underscore with space and do other stuff
+			// label := fname[idx+len(versionSep) : len(fname)-len(sfx)]
+
+			//TODO: get the first line of comment as the desc
+			cksum, err := s.checksumSourceFile(filepath.Join(s.url, fname))
+			if err != nil {
+				panic(err)
+			}
+			if cksum == 0 {
+				//TODO: check the reference behavior
+				continue
+			}
+
+			//TODO: inspect the file?
+			//TODO: ensure no files with the same version
+			// if _, ok := s.files[vstr]; ok {
+			// 	//TODO: write test case for this
+			// 	return 0, errors.Errorf("fwish: version %q duplicated", vstr)
+			// }
+
+			s.files = append(s.files, SourceMigration{
+				Name:     fname,
+				Checksum: cksum,
+			})
+		}
+	}
+
+	s.scanned = true
+
+	return len(s.files), nil
+}
+
+func (s *sqlSource) checksumSourceFile(filename string) (uint32, error) {
+	fh, err := os.Open(filename)
+	if err != nil {
+		return 0, errors.Wrap(err, "fwish: unable opening file for checksum")
+	}
+	defer fh.Close()
+
+	scanner := bufio.NewScanner(fh)
+	scanner.Split(bufio.ScanLines)
+
+	ck := crc32.NewIEEE()
+	for scanner.Scan() {
+		ck.Write(scanner.Bytes())
+	}
+
+	return ck.Sum32(), nil
 }
 
 // Might want store the tx in here too
@@ -98,6 +241,14 @@ type state struct {
 	db            DB
 	validated     bool
 	installedRank int32
+}
+
+type migration struct {
+	version  string // normalized for easy comparison?
+	label    string
+	name     string
+	checksum uint32
+	source   Source
 }
 
 // Migrator is the ..
@@ -110,7 +261,9 @@ type Migrator struct {
 	schemaID      string
 	metaTableName string
 
-	source *sqlSource //TODO: should be a list of interface implementations
+	migrations []migration //TODO: list of {version, name, src} sorted by rank
+	versions   map[string]bool // map to rank / index? to migration?
+	sources    []Source
 
 	logger LogOutputer
 }
@@ -122,34 +275,12 @@ type Migrator struct {
 // migration source meta file and the metadata table. The recommended
 // value for schemaID is an UUID or the URI of the application.
 //
-func NewMigrator(sourceDir, schemaID string) (*Migrator, error) {
+func NewMigrator(schemaID string) (*Migrator, error) {
 	schemaID = strings.TrimSpace(schemaID)
-
-	src := sqlSource{url: sourceDir}
 
 	m := &Migrator{
 		schemaID:      schemaID,
 		metaTableName: "schema_version",
-		source:        &src,
-	}
-
-	meta, err := src.Meta()
-	if err != nil {
-		return nil, errors.Wrap(err, "fwish: source meta error")
-	}
-
-	//TODO: get the schemaName from the source with first rank
-	if meta.Name != "" {
-		m.schemaName = strings.TrimSpace(meta.Name)
-		//TODO: ensure valid schema name
-	}
-	if m.schemaName == "" {
-		//TODO: more descriptive error message
-		return nil, errors.New("fwish: undefined schema name")
-	}
-	id := strings.TrimSpace(meta.ID)
-	if id != "" && !strings.EqualFold(id, m.schemaID) { // case-sensitive?
-		return nil, ErrSchemaIDMismatch
 	}
 
 	//TODO: inspect the source files
@@ -167,11 +298,79 @@ func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 
 // AddSource register a migrations provider. The source must have the same
 // schema ID as the migrator.
-func (m *Migrator) AddSource(src *Source) error {
+func (m *Migrator) AddSource(src Source) error {
 	//TODO: everytime this function is called, we inspect the new source
 	// and get info about all migrations it contained and insert those
 	// migrations into our master list based on the ranks.
-	return errors.New("not implemented yet")
+
+	//TODO: get the schemaName from the source with first rank
+	if m.schemaName == "" {
+		m.schemaName = src.SchemaName()
+		//TODO: ensure valid schema name
+	}
+	if m.schemaName == "" {
+		//TODO: move somewhere more appropriate or if it's empty,
+		// use default, e.g., "public"
+		//TODO: more descriptive error message
+		return errors.New("fwish: undefined schema name")
+	}
+	id := src.SchemaID()
+	if id == "" || id != m.schemaID { // case-insensitive / case-fold?
+		return ErrSchemaIDMismatch
+	}
+
+	ml, err := src.Migrations()
+	if err != nil {
+		return errors.Wrap(err, "fwish: unable to get source's migration names")
+	}
+
+	if m.versions == nil {
+		m.versions = make(map[string]bool)
+	}
+
+	//TODO: dupe
+	suffix := ".sql"
+	versionSep := "__"
+
+	for _, mi := range ml {
+		//TODO: validate things!
+		// version string is [0-9\.] with underscore deprecated
+		mn := mi.Name
+		idx := strings.Index(mn, versionSep)
+		if idx == -1 {
+			return errors.Errorf("fwish: invalid migration name %q", mn)
+		}
+		vstr := mn[:idx]
+		//TODO: replace the underscore with space and do other stuff
+		label := strings.TrimSpace(
+			strings.Replace(
+				mn[idx+len(versionSep) : len(mn)-len(suffix)], "_", " ", -1))
+
+		if _, ok := m.versions[vstr]; ok {
+			//TODO: test case for this
+			return errors.Errorf("fwish: duplicate version %q", vstr)
+		}
+
+		m.migrations = append(m.migrations, migration{
+			version:  vstr,
+			label:    label,
+			name:     mn,
+			checksum: mi.Checksum,
+			source:   src,
+		})
+	}
+
+	//NOTE: this won't work intuitively
+	// try sorting
+	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
+	//TODO: use numeric comparison
+	sort.Slice(m.migrations, func(i, j int) bool {
+		return strings.Compare(m.migrations[i].version, m.migrations[j].version) < 0
+	})
+
+	m.sources = append(m.sources, src)
+
+	return nil
 }
 
 // SchemaName returns the name of the schema the migrations are for.
@@ -217,15 +416,12 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	}
 
 	//TODO: use Tx
-	for i := int(st.installedRank); i < len(m.source.sortedFilenames); i++ {
-		sf, ok := m.source.files[m.source.sortedFilenames[i]]
-		if !ok {
-			return 0, errors.New("fwish: unexpected condition")
-		}
+	for i := int(st.installedRank); i < len(m.migrations); i++ {
+		sf := m.migrations[i]
 		if m.logger != nil {
 			m.logger.Output(2, fmt.Sprintf(
-				"Migrating schema %q to version %s - %s (%d)",
-				st.schemaName, sf.version, sf.label, i+1,
+				"Migrating schema %q to version %s - %s",
+				st.schemaName, sf.version, sf.label,
 			))
 		}
 		err = m.applySourceFile(st, int32(i+1), &sf)
@@ -246,108 +442,108 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 // Status returns whether all the migrations have been applied.
 //
 func (m *Migrator) Status(db DB) (diff int, err error) {
-	if err := m.ensureSourceFilesScanned(); err != nil {
-		return 0, err
-	}
+	// if err := m.ensureSourceFilesScanned(); err != nil {
+	// 	return 0, err
+	// }
 
 	// SELECT * FROM table WHERE status IS TRUE
 
 	return 0, errors.New("not implemented yet")
 }
 
-func (m *Migrator) ensureSourceFilesScanned() error {
-	if m.source.scanned {
-		return nil
-	}
-	_, err := m.scanSourceDir()
-	return err
-}
+// func (m *Migrator) ensureSourceFilesScanned() error {
+// 	if m.source.scanned {
+// 		return nil
+// 	}
+// 	_, err := m.scanSourceDir()
+// 	return err
+// }
 
 // returns the number of files?
-func (m *Migrator) scanSourceDir() (numFiles int, err error) {
-	// We might want to make these configurable
-	ignorePrefix := "_"
-	suffix := ".sql"
-	versionSep := "__"
+// func (m *Migrator) scanSourceDir() (numFiles int, err error) {
+// 	// We might want to make these configurable
+// 	ignorePrefix := "_"
+// 	suffix := ".sql"
+// 	versionSep := "__"
 
-	numFiles = 0
-	m.source.files = make(map[string]sourceFile)
-	m.source.sortedFilenames = nil
+// 	numFiles = 0
+// 	m.source.files = make(map[string]sourceFile)
+// 	m.source.sortedFilenames = nil
 
-	fl, err := ioutil.ReadDir(m.source.url)
-	if err != nil {
-		return 0, err //TODO: handle no such file (and wrap the error)
-	}
+// 	fl, err := ioutil.ReadDir(m.source.url)
+// 	if err != nil {
+// 		return 0, err //TODO: handle no such file (and wrap the error)
+// 	}
 
-	for _, entry := range fl {
-		fname := entry.Name()
+// 	for _, entry := range fl {
+// 		fname := entry.Name()
 
-		if strings.HasPrefix(fname, ignorePrefix) {
-			continue
-		}
-		if !strings.HasSuffix(fname, suffix) {
-			continue
-		}
+// 		if strings.HasPrefix(fname, ignorePrefix) {
+// 			continue
+// 		}
+// 		if !strings.HasSuffix(fname, suffix) {
+// 			continue
+// 		}
 
-		if idx := strings.Index(fname, versionSep); idx > 0 {
-			vstr := fname[:idx]
-			//TODO: replace the underscore with space and do other stuff
-			label := fname[idx+len(versionSep) : len(fname)-len(suffix)]
+// 		if idx := strings.Index(fname, versionSep); idx > 0 {
+// 			vstr := fname[:idx]
+// 			//TODO: replace the underscore with space and do other stuff
+// 			label := fname[idx+len(versionSep) : len(fname)-len(suffix)]
 
-			//TODO: get the first line of comment as the desc
-			cksum, err := m.checksumSourceFile(filepath.Join(m.source.url, fname))
-			if err != nil {
-				panic(err)
-			}
-			if cksum == 0 {
-				//TODO: check the reference behavior
-				continue
-			}
+// 			//TODO: get the first line of comment as the desc
+// 			cksum, err := m.checksumSourceFile(filepath.Join(m.source.url, fname))
+// 			if err != nil {
+// 				panic(err)
+// 			}
+// 			if cksum == 0 {
+// 				//TODO: check the reference behavior
+// 				continue
+// 			}
 
-			//TODO: inspect the file?
-			//TODO: ensure no files with the same version
-			if _, ok := m.source.files[vstr]; ok {
-				//TODO: write test case for this
-				return 0, errors.Errorf("fwish: version %q duplicated", vstr)
-			}
+// 			//TODO: inspect the file?
+// 			//TODO: ensure no files with the same version
+// 			if _, ok := m.source.files[vstr]; ok {
+// 				//TODO: write test case for this
+// 				return 0, errors.Errorf("fwish: version %q duplicated", vstr)
+// 			}
 
-			m.source.files[vstr] = sourceFile{
-				version:  vstr,
-				label:    label,
-				filename: fname,
-				checksum: cksum,
-			}
-			m.source.sortedFilenames = append(m.source.sortedFilenames, vstr)
-		}
-	}
+// 			m.source.files[vstr] = sourceFile{
+// 				version:  vstr,
+// 				label:    label,
+// 				filename: fname,
+// 				checksum: cksum,
+// 			}
+// 			m.source.sortedFilenames = append(m.source.sortedFilenames, vstr)
+// 		}
+// 	}
 
-	//NOTE: this won't work intuitively
-	// try sorting
-	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
-	sort.Strings(m.source.sortedFilenames)
+// 	//NOTE: this won't work intuitively
+// 	// try sorting
+// 	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
+// 	sort.Strings(m.source.sortedFilenames)
 
-	m.source.scanned = true
+// 	m.source.scanned = true
 
-	return len(m.source.sortedFilenames), nil
-}
+// 	return len(m.source.sortedFilenames), nil
+// }
 
-func (m *Migrator) checksumSourceFile(filename string) (uint32, error) {
-	fh, err := os.Open(filename)
-	if err != nil {
-		return 0, errors.Wrap(err, "fwish: unable opening file for checksum")
-	}
-	defer fh.Close()
+// func (m *Migrator) checksumSourceFile(filename string) (uint32, error) {
+// 	fh, err := os.Open(filename)
+// 	if err != nil {
+// 		return 0, errors.Wrap(err, "fwish: unable opening file for checksum")
+// 	}
+// 	defer fh.Close()
 
-	scanner := bufio.NewScanner(fh)
-	scanner.Split(bufio.ScanLines)
+// 	scanner := bufio.NewScanner(fh)
+// 	scanner.Split(bufio.ScanLines)
 
-	ck := crc32.NewIEEE()
-	for scanner.Scan() {
-		ck.Write(scanner.Bytes())
-	}
+// 	ck := crc32.NewIEEE()
+// 	for scanner.Scan() {
+// 		ck.Write(scanner.Bytes())
+// 	}
 
-	return ck.Sum32(), nil
-}
+// 	return ck.Sum32(), nil
+// }
 
 //TODO: if the meta table does not exist or there's no revision but the schema already
 // has other tables, we should return error.
@@ -459,9 +655,9 @@ func (m *Migrator) validateDBSchema(st *state) error {
 	st.validated = false //
 	st.installedRank = -1
 
-	if err := m.ensureSourceFilesScanned(); err != nil {
-		return err
-	}
+	// if err := m.ensureSourceFilesScanned(); err != nil {
+	// 	return err
+	// }
 
 	rows, err := st.db.Query(fmt.Sprintf(
 		`SELECT installed_rank, version, script, checksum, success
@@ -505,7 +701,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 			panic("DB has failed migration")
 		}
 
-		if int(i) > len(m.source.sortedFilenames) {
+		if int(i) > len(m.migrations) {
 			//TODO: a test for this case
 			return errors.New("fwish: DB has more migrations than the source")
 		}
@@ -514,16 +710,14 @@ func (m *Migrator) validateDBSchema(st *state) error {
 			continue
 		}
 
-		mig, ok := m.source.files[m.source.sortedFilenames[i-1]]
-		if !ok {
-			// Should never happen
-			return errors.New("fwish: inconsitent migrator state")
-		}
+		mig := m.migrations[i-1]
 
 		if mig.checksum != checksum {
 			//TODO: ensure the message has enough details
 			return errors.Errorf("fwish: checksum mismatch for rank %d: %s", i, script)
 		}
+
+		// check other stuff?
 
 		st.installedRank = i
 	}
@@ -534,32 +728,13 @@ func (m *Migrator) validateDBSchema(st *state) error {
 	return nil
 }
 
-func (m *Migrator) applySourceFile(st *state, rank int32, sf *sourceFile) error {
-	//TODO: load all the content, checksum, then execute
-	fh, err := os.Open(filepath.Join(m.source.url, sf.filename))
-	if err != nil {
-		panic(err)
-	}
-	defer fh.Close()
-
-	var script string
-	scanner := bufio.NewScanner(fh)
-	scanner.Split(bufio.ScanLines)
-
-	ck := crc32.NewIEEE()
-	for scanner.Scan() {
-		ck.Write(scanner.Bytes())
-		script += scanner.Text() + "\n"
-	}
-
-	if sf.checksum != ck.Sum32() {
-		//TODO: more informative message
-		return errors.Errorf("fwish: bad source checksum %q", sf.filename)
-	}
-
+func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
 	tStart := time.Now()
 
-	_, err = st.db.Exec(script)
+	err := sf.source.ExecuteMigration(st.db, SourceMigration{
+		Name:     sf.name,
+		Checksum: sf.checksum,
+	})
 	if err != nil {
 		return err
 	}
@@ -583,7 +758,7 @@ func (m *Migrator) applySourceFile(st *state, rank int32, sf *sourceFile) error 
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
 			st.schemaName, m.metaTableName,
 		),
-		rank, sf.version, sf.label, sf.filename, sf.checksum, "", tStart.UTC(), dt,
+		rank, sf.version, sf.label, sf.name, sf.checksum, "", tStart.UTC(), dt,
 	)
 
 	if err != nil {
