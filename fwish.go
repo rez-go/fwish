@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,11 +55,13 @@ type state struct {
 }
 
 type migration struct {
-	version  string // normalized for easy comparison?
-	label    string
-	name     string
-	checksum uint32
-	source   Source
+	versionRaw  string
+	versionStr  string
+	versionInts []int64
+	label       string
+	name        string
+	checksum    uint32
+	source      Source
 }
 
 // Migrator is the ..
@@ -141,32 +144,63 @@ func (m *Migrator) AddSource(src Source) error {
 	//TODO: dupe
 	suffix := ".sql"
 	versionSep := "__"
+	versionPrefix := "V"
 
 	for _, mi := range ml {
 		//TODO: validate things!
 		// version string is [0-9\.] with underscore deprecated
 		mn := mi.Name
+		//TODO: repeatable
+		if !strings.HasPrefix(mn, versionPrefix) {
+			return errors.Errorf("fwish: migration name %q has invalid prefix", mn)
+		}
 		idx := strings.Index(mn, versionSep)
 		if idx == -1 {
+			//TODO: could we have name without the description?
 			return errors.Errorf("fwish: invalid migration name %q", mn)
 		}
-		vstr := mn[:idx]
+		vraw := mn[:idx]
 		//TODO: replace the underscore with space and do other stuff
 		label := strings.TrimSpace(
 			strings.Replace(
 				mn[idx+len(versionSep):len(mn)-len(suffix)], "_", " ", -1))
 
+		vstr := vraw[len(versionPrefix):]
+		if vstr == "" {
+			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
+		}
+
+		//TODO: we might want to support underscore for compatibility
+		vps := strings.Split(vstr, ".")
+		vints := make([]int64, len(vps))
+		for i, sv := range vps {
+			iv, err := strconv.ParseInt(strings.TrimLeft(sv, "0"), 10, 64)
+			if err != nil {
+				return errors.Errorf("fwish: migration version %q contains invalid value", vraw)
+			}
+			vints[i] = iv
+		}
+
+		sl := make([]string, len(vints))
+		for i, iv := range vints {
+			sl[i] = strconv.FormatInt(iv, 10)
+		}
+		vstr = strings.Join(sl, ".")
+
 		if _, ok := m.versions[vstr]; ok {
 			//TODO: test case for this
 			return errors.Errorf("fwish: duplicate version %q", vstr)
 		}
+		m.versions[vstr] = true
 
 		m.migrations = append(m.migrations, migration{
-			version:  vstr,
-			label:    label,
-			name:     mn,
-			checksum: mi.Checksum,
-			source:   src,
+			versionRaw:  vraw,
+			versionStr:  vstr,
+			versionInts: vints,
+			label:       label,
+			name:        mn,
+			checksum:    mi.Checksum,
+			source:      src,
 		})
 	}
 
@@ -175,7 +209,7 @@ func (m *Migrator) AddSource(src Source) error {
 	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
 	//TODO: use numeric comparison
 	sort.Slice(m.migrations, func(i, j int) bool {
-		return strings.Compare(m.migrations[i].version, m.migrations[j].version) < 0
+		return strings.Compare(m.migrations[i].versionStr, m.migrations[j].versionStr) < 0
 	})
 
 	m.sources = append(m.sources, src)
@@ -231,7 +265,7 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		if m.logger != nil {
 			m.logger.Output(2, fmt.Sprintf(
 				"Migrating schema %q to version %s - %s",
-				st.schemaName, sf.version, sf.label,
+				st.schemaName, sf.versionStr, sf.label,
 			))
 		}
 		err = m.applySourceFile(st, int32(i+1), &sf)
@@ -568,7 +602,7 @@ func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
 			st.schemaName, m.metaTableName,
 		),
-		rank, sf.version, sf.label, sf.name, sf.checksum, "", tStart.UTC(), dt,
+		rank, sf.versionStr, sf.label, sf.name, sf.checksum, "", tStart.UTC(), dt,
 	)
 
 	if err != nil {
