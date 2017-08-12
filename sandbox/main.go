@@ -1,15 +1,15 @@
-
 package main
 
 import (
-	"os"
-	"time"
 	"database/sql"
 	"log"
+	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 
 	"github.com/exavolt/fwish"
+	sqlsource "github.com/exavolt/fwish/source/sql"
 )
 
 func main() {
@@ -41,7 +41,7 @@ func main() {
 		panic(err)
 	}
 	mg.WithLogger(logger)
-	src, err := fwish.NewSQLSource("../test-data/basic")
+	src, err := sqlsource.Load("../test-data/basic")
 	if err != nil {
 		panic(err)
 	}
@@ -71,4 +71,3 @@ func main() {
 			n, schemaName, time.Now().Sub(t0).String())
 	}
 }
-

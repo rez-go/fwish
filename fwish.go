@@ -67,11 +67,11 @@ type migration struct {
 // both of them.
 //TODO: make safe for concurrent usage?
 type Migrator struct {
-	schemaName    string
+	schemaName    string //TODO: any actual use?
 	schemaID      string
 	metaTableName string
 
-	migrations []migration //TODO: list of {version, name, src} sorted by rank
+	migrations []migration     //TODO: list of {version, name, src} sorted by rank
 	versions   map[string]bool // map to rank / index? to migration?
 	sources    []Source
 
@@ -154,7 +154,7 @@ func (m *Migrator) AddSource(src Source) error {
 		//TODO: replace the underscore with space and do other stuff
 		label := strings.TrimSpace(
 			strings.Replace(
-				mn[idx+len(versionSep) : len(mn)-len(suffix)], "_", " ", -1))
+				mn[idx+len(versionSep):len(mn)-len(suffix)], "_", " ", -1))
 
 		if _, ok := m.versions[vstr]; ok {
 			//TODO: test case for this

@@ -8,6 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/exavolt/fwish"
+	sqlsource "github.com/exavolt/fwish/source/sql"
 )
 
 //TODO:
@@ -29,7 +30,7 @@ func TestBasic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := fwish.NewSQLSource("./test-data/basic")
+	src, err := sqlsource.Load("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestBasicSQLX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := fwish.NewSQLSource("./test-data/basic")
+	src, err := sqlsource.Load("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestSchemaID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := fwish.NewSQLSource("./test-data/basic")
+	src, err := sqlsource.Load("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestSchemaID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err = fwish.NewSQLSource("./test-data/basic")
+	src, err = sqlsource.Load("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}

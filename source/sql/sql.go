@@ -1,4 +1,4 @@
-package fwish
+package sql
 
 import (
 	"bufio"
@@ -10,6 +10,8 @@ import (
 
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
+
+	"github.com/exavolt/fwish"
 )
 
 //TODO: dialect / engine etc.
@@ -25,10 +27,10 @@ type sqlSource struct {
 	url        string
 	fileSuffix string
 	scanned    bool
-	files      []SourceMigration
+	files      []fwish.SourceMigration
 }
 
-func NewSQLSource(sourceURL string) (Source, error) {
+func Load(sourceURL string) (fwish.Source, error) {
 	src := sqlSource{url: sourceURL}
 	if err := src.loadMeta(); err != nil {
 		return nil, err
@@ -74,7 +76,7 @@ func (s *sqlSource) SchemaName() string {
 	return s.schemaName
 }
 
-func (s *sqlSource) Migrations() ([]SourceMigration, error) {
+func (s *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
 	if !s.scanned {
 		_, err := s.scanSourceDir()
 		if err != nil {
@@ -84,7 +86,7 @@ func (s *sqlSource) Migrations() ([]SourceMigration, error) {
 	return s.files, nil
 }
 
-func (s *sqlSource) ExecuteMigration(db DB, sm SourceMigration) error {
+func (s *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) error {
 	//TODO: ensure that the it's our migration
 	//TODO: load all the content, checksum, then execute
 	fh, err := os.Open(filepath.Join(s.url, sm.Name))
@@ -166,7 +168,7 @@ func (s *sqlSource) scanSourceDir() (numFiles int, err error) {
 			// 	return 0, errors.Errorf("fwish: version %q duplicated", vstr)
 			// }
 
-			s.files = append(s.files, SourceMigration{
+			s.files = append(s.files, fwish.SourceMigration{
 				Name:     fname,
 				Checksum: cksum,
 			})
