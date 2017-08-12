@@ -207,9 +207,29 @@ func (m *Migrator) AddSource(src Source) error {
 	//NOTE: this won't work intuitively
 	// try sorting
 	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
-	//TODO: use numeric comparison
+	//TODO: test case for this
 	sort.Slice(m.migrations, func(i, j int) bool {
-		return strings.Compare(m.migrations[i].versionStr, m.migrations[j].versionStr) < 0
+		vlA := m.migrations[i].versionInts
+		vlB := m.migrations[j].versionInts
+		// There's at least one part
+		if vlA[0] < vlB[0] {
+			return true
+		}
+		var mx int
+		if len(vlA) < len(vlB) {
+			mx = len(vlA)
+		} else {
+			mx = len(vlB)
+		}
+		for k := 1; k < mx; k++ {
+			if vlA[k] < vlB[k] {
+				return true
+			}
+			if vlA[k] > vlB[k] {
+				return false
+			}
+		}
+		return len(vlA) < len(vlB)
 	})
 
 	m.sources = append(m.sources, src)
