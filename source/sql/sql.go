@@ -101,7 +101,7 @@ func (src *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
 func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) error {
 	//TODO: ensure that the it's our migration
 	//TODO: load all the content, checksum, then execute
-	fh, err := os.Open(filepath.Join(src.url, sm.Name))
+	fh, err := os.Open(filepath.Join(src.url, sm.Script))
 	if err != nil {
 		return errors.Wrap(err, "fwish.sql: unable to load migration file")
 	}
@@ -167,7 +167,8 @@ func (src *sqlSource) scanSourceDir() (numFiles int, err error) {
 		}
 
 		src.files = append(src.files, fwish.SourceMigration{
-			Name:     fname,
+			Name:     fname[:len(fname)-len(sfx)],
+			Script:   fname,
 			Checksum: cksum,
 		})
 	}

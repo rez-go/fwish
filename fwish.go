@@ -14,6 +14,7 @@ import (
 
 //TODO: the DB's schemaID is the one with the highest authority. if the
 // DB has it, the migrator and the source must provide valid schema ids.
+//TODO: consider utilizing context.Context
 
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
@@ -37,6 +38,7 @@ type LogOutputer interface {
 //TODO: interface so the source can lazy-checksum
 type SourceMigration struct {
 	Name     string
+	Script   string
 	Checksum uint32
 }
 
@@ -70,6 +72,7 @@ type migration struct {
 	versionInts []int64
 	label       string
 	name        string
+	script      string
 	checksum    uint32
 	source      Source
 }
@@ -151,7 +154,6 @@ func (m *Migrator) AddSource(src Source) error {
 	}
 
 	//TODO: dupe
-	suffix := ".sql"
 	versionSep := "__"
 	versionPrefix := "V"
 
@@ -172,7 +174,7 @@ func (m *Migrator) AddSource(src Source) error {
 		//TODO: label processing
 		label := strings.TrimSpace(
 			strings.Replace(
-				mn[idx+len(versionSep):len(mn)-len(suffix)], "_", " ", -1))
+				mn[idx+len(versionSep):], "_", " ", -1))
 
 		vstr := vraw[len(versionPrefix):]
 		if vstr == "" {
@@ -210,6 +212,7 @@ func (m *Migrator) AddSource(src Source) error {
 			versionInts: vints,
 			label:       label,
 			name:        mn,
+			script:      mi.Script,
 			checksum:    mi.Checksum,
 			source:      src,
 		})
@@ -301,7 +304,7 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 				st.schemaName, sf.versionStr, sf.label,
 			))
 		}
-		err = m.applySourceFile(st, int32(i+1), &sf)
+		err = m.executeMigration(st, int32(i+1), &sf)
 		if err != nil {
 			return 0, err
 		}
@@ -479,6 +482,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		}
 
 		if !success {
+			// what to do?
 			panic("DB has failed migration")
 		}
 
@@ -509,11 +513,12 @@ func (m *Migrator) validateDBSchema(st *state) error {
 	return nil
 }
 
-func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
+func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error {
 	tStart := time.Now()
 
 	err := sf.source.ExecuteMigration(st.db, SourceMigration{
 		Name:     sf.name,
+		Script:   sf.script,
 		Checksum: sf.checksum,
 	})
 	if err != nil {
@@ -539,7 +544,7 @@ func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
 			st.schemaName, st.metaTableName,
 		),
-		rank, sf.versionStr, sf.label, sf.name, sf.checksum, "", tStart.UTC(), dt,
+		rank, sf.versionStr, sf.label, sf.script, sf.checksum, "", tStart.UTC(), dt,
 	)
 
 	if err != nil {
