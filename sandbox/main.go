@@ -41,6 +41,7 @@ func main() {
 		panic(err)
 	}
 	mg.WithLogger(logger)
+	mg.WithUserID("sandbox")
 	src, err := sqlsource.Load("../test-data/basic")
 	if err != nil {
 		panic(err)

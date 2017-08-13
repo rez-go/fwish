@@ -13,7 +13,7 @@ import (
 )
 
 //TODO: the DB's schemaID is the one with the highest authority. if the
-// DB has it, the migrator and the source must provide valid schema ids.
+// DB has it, the migrator and the source must provide matching schema ids.
 //TODO: consider utilizing context.Context
 
 // DB is an interface which can be fulfilled by a sql.DB instance.
@@ -80,10 +80,12 @@ type migration struct {
 //
 //TODO: logger. two types: structured and unstructured. we should support
 // both of them.
-//TODO: make safe for concurrent usage?
+//TODO: make the instance safe for concurrent usage? for example we want
+// to migrate multiple targets.
 type Migrator struct {
 	schemaID   string
 	schemaName string //TODO: any actual use?
+	userID     string
 
 	sources    []MigrationSource
 	migrations []migration     //TODO: list of {version, name, src} sorted by rank
@@ -115,16 +117,21 @@ func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 	return m
 }
 
+// WithUserID sets the user identifier who performed the next migrations.
+// Recommended value is user's email address.
+//
+func (m *Migrator) WithUserID(userID string) *Migrator {
+	m.userID = userID
+	return m
+}
+
 // AddSource register a migrations provider. The source must have the same
 // schema ID as the migrator.
 //
 // All the migrations from all sources will be compiled.
 //
 func (m *Migrator) AddSource(src MigrationSource) error {
-	//TODO: everytime this function is called, we inspect the new source
-	// and get info about all migrations it contained and insert those
-	// migrations into our master list based on the ranks.
-	//TODO: currrently, if we failed while adding migration, the state
+	//TODO: currently, if we failed while adding migration, the state
 	// of migrator is undefined, we should prevent undefined state.
 	// we first validate all the migrations first then apply the
 	// apply the changes after all have been validated.
@@ -169,7 +176,7 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 			return errors.Errorf("fwish: invalid migration name %q", mn)
 		}
 		vstr := mn[:idx]
-		//TODO: label processing
+		//TODO: proper label processing
 		label := strings.TrimSpace(
 			strings.Replace(
 				mn[idx+len(migrationVersionSeparator):], "_", " ", -1))
@@ -255,8 +262,6 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	st := &state{db, schemaName, "schema_version", false, -1}
 
 	var searchPath string
-	//TODO: get search path, set into specified schema, execute the
-	// migrations, restore the search path.
 	err = st.db.QueryRow("SHOW search_path").Scan(&searchPath)
 	if err != nil {
 		return 0, err
@@ -294,14 +299,8 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		num++
 	}
 
-	if searchPath != "" {
-		_, err = st.db.Exec("SET search_path TO " + searchPath)
-		if err != nil {
-			return num, err
-		}
-	}
-
-	return num, nil
+	_, err = st.db.Exec("SET search_path TO " + searchPath)
+	return num, err
 }
 
 // Status returns whether all the migrations have been applied.
@@ -349,8 +348,6 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 
 	var idstr string
 
-	//TODO: if the table is not empty, and there's no meta, should we
-	// return an error?
 	err = st.db.QueryRow(fmt.Sprintf(
 		`SELECT script FROM %s.%s WHERE installed_rank=0`,
 		st.schemaName, st.metaTableName,
@@ -397,7 +394,6 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 
 	//TODO: ensure indexes
 
-	//TODO: set desc and installed_by
 	_, err = st.db.Exec(
 		fmt.Sprintf(
 			`INSERT INTO %s.%s (
@@ -414,7 +410,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 			VALUES (0,$1,$2,'meta',$3,0,$4,$5,0,true)`,
 			st.schemaName, st.metaTableName,
 		),
-		"0", st.schemaName, m.schemaID, "", time.Now().UTC(),
+		"0", st.schemaName, m.schemaID, m.userID, time.Now().UTC(),
 	)
 	if err != nil {
 		return err
@@ -512,7 +508,6 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 
 	dt := time.Since(tStart) / time.Millisecond
 
-	//TODO: set desc and installed_by
 	_, err = st.db.Exec(
 		fmt.Sprintf(
 			`INSERT INTO %s.%s (
@@ -529,7 +524,8 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
 			st.schemaName, st.metaTableName,
 		),
-		rank, sf.versionStr, sf.label, sf.script, sf.checksum, "", tStart.UTC(), dt,
+		rank, sf.versionStr, sf.label, sf.script, sf.checksum,
+		m.userID, tStart.UTC(), dt,
 	)
 
 	return err
