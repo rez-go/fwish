@@ -534,21 +534,25 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 func (m *Migrator) parseVersion(vstr string) (normalized string, parts []int64, err error) {
 	//TODO: we might want to support underscore for compatibility.
 	// some source might using class name for the migration name.
-	vps := strings.Split(vstr, ".")
-	vints := make([]int64, len(vps))
-	for i, sv := range vps {
-		iv, err := strconv.ParseInt(strings.TrimLeft(sv, "0"), 10, 64)
+	pl := strings.Split(vstr, ".")
+	if len(pl) == 1 {
+		// Try underscore
+		pl = strings.Split(vstr, "_")
+	}
+	vints := make([]int64, len(pl))
+	for i, sv := range pl {
+		// note that we don't need to trim left zeroes as we explicitly
+		// tell the parser that the number is a decimal.
+		iv, err := strconv.ParseInt(sv, 10, 64)
 		if err != nil {
-			return "", nil, errors.Errorf("fwish: migration version %q contains invalid value", vstr)
+			return "", nil, errors.Errorf("fwish: version %q contains invalid value", vstr)
 		}
 		vints[i] = iv
 	}
-
+	// Convert them back to string
 	sl := make([]string, len(vints))
 	for i, iv := range vints {
 		sl[i] = strconv.FormatInt(iv, 10)
 	}
-	// Build normalized string
-	vstr = strings.Join(sl, ".")
-	return vstr, vints, nil
+	return strings.Join(sl, "."), vints, nil
 }
