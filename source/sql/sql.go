@@ -30,6 +30,24 @@ type sqlSource struct {
 	files      []fwish.SourceMigration
 }
 
+// NewMigrator is a helper function to create a migrator if there's
+// only one source.
+func NewMigrator(schemaID string, sourceURL string) (*fwish.Migrator, error) {
+	mg, err := fwish.NewMigrator(schemaID)
+	if err != nil {
+		return nil, err
+	}
+	src, err := Load(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+	err = mg.AddSource(src)
+	if err != nil {
+		return nil, err
+	}
+	return mg, nil
+}
+
 // Load creates a SQL-based migration source from specified URL.
 func Load(sourceURL string) (fwish.Source, error) {
 	src := sqlSource{url: sourceURL}

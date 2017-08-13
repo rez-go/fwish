@@ -17,6 +17,7 @@ import (
 //   this way, we can be sure that the source files are always consistent.
 // - test with search_path set to other schema
 // - test with SQLs which use schema explicitly (other than defined schema)
+// - test multiple sources
 
 const dsn = "postgres:///?sslmode=disable"
 
@@ -54,7 +55,16 @@ func TestBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 	//TODO: validate
+	// Apply the migration again
+	n, err := mg.Migrate(db, testSchemaName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("0 expected, got %d", n)
+	}
 
+	//TODO: should be a defered statement
 	_, err = db.Exec(`DROP SCHEMA ` + testSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +101,17 @@ func TestBasicSQLX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//TODO: validate
+	// Apply the migration again
+	n, err := mg.Migrate(db, testSchemaName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("0 expected, got %d", n)
+	}
 
+	//TODO: should be a defered statement
 	_, err = db.Exec(`DROP SCHEMA ` + testSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)

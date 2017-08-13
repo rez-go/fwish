@@ -12,6 +12,9 @@ import (
 	"github.com/pkg/errors"
 )
 
+//TODO: the DB's schemaID is the one with the highest authority. if the
+// DB has it, the migrator and the source must provide valid schema ids.
+
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
 // implementations, for example, github.com/jmoiron/sqlx .
@@ -77,12 +80,12 @@ type migration struct {
 // both of them.
 //TODO: make safe for concurrent usage?
 type Migrator struct {
-	schemaName string //TODO: any actual use?
 	schemaID   string
+	schemaName string //TODO: any actual use?
 
+	sources    []Source
 	migrations []migration     //TODO: list of {version, name, src} sorted by rank
 	versions   map[string]bool // map to rank / index? to migration?
-	sources    []Source
 
 	logger LogOutputer
 }
@@ -95,12 +98,9 @@ type Migrator struct {
 // value for schemaID is an UUID or the URI of the application.
 //
 func NewMigrator(schemaID string) (*Migrator, error) {
-	schemaID = strings.TrimSpace(schemaID)
-
 	m := &Migrator{
 		schemaID: schemaID,
 	}
-
 	return m, nil
 }
 
@@ -122,21 +122,23 @@ func (m *Migrator) AddSource(src Source) error {
 	//TODO: everytime this function is called, we inspect the new source
 	// and get info about all migrations it contained and insert those
 	// migrations into our master list based on the ranks.
+	//TODO: currrently, if we failed while adding migration, the state
+	// of migrator is undefined, we should prevent undefined state.
+	// we first validate all the migrations first then apply the
+	// apply the changes after all have been validated.
 
 	//TODO: get the schemaName from the source with first rank
 	if m.schemaName == "" {
 		m.schemaName = src.SchemaName()
 		//TODO: ensure valid schema name
 	}
-	if m.schemaName == "" {
-		//TODO: move somewhere more appropriate or if it's empty,
-		// use default, e.g., "public"
-		//TODO: more descriptive error message
-		return errors.New("fwish: undefined schema name")
-	}
 	id := src.SchemaID()
-	if id == "" || id != m.schemaID { // case-insensitive / case-fold?
-		return ErrSchemaIDMismatch
+	if m.schemaID != "" {
+		if id == "" || id != m.schemaID { // case-insensitive / case-fold?
+			return ErrSchemaIDMismatch
+		}
+	} else {
+		m.schemaID = id
 	}
 
 	ml, err := src.Migrations()
@@ -243,8 +245,8 @@ func (m *Migrator) AddSource(src Source) error {
 	return nil
 }
 
-// SchemaName returns the name of the schema the migrations are for.
-func (m *Migrator) SchemaName() string { return m.schemaName }
+// SchemaID returns the ID of the schema the migrations are for.
+func (m *Migrator) SchemaID() string { return m.schemaID }
 
 // Migrate execute the migrations.
 //
@@ -258,6 +260,12 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	//TODO: validate the parameters
 	// - we should use regex for schemaName. [A-Za-z0-9_]
 	//TODO: use source's schemaName as the default?
+	if schemaName == "" {
+		schemaName = m.schemaName
+	}
+	if schemaName == "" {
+		schemaName = "public"
+	}
 	st := &state{db, schemaName, "schema_version", false, -1}
 
 	var searchPath string
@@ -317,8 +325,6 @@ func (m *Migrator) Status(db DB) (diff int, err error) {
 	return 0, errors.New("not implemented yet")
 }
 
-//TODO: if the meta table does not exist or there's no revision but the schema already
-// has other tables, we should return error.
 func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	// if st.schemaInit {
 	// 	return nil
@@ -326,6 +332,11 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	// st.schemaInit = true
 
 	//TODO: all these things should be inside a transaction
+	//TODO: if the meta table does not exist or there's no revision but
+	// the schema already has other tables, we should return error.
+	//TODO: if the DB has no schema meta but already has entries,
+	// we assume that it's a from fw. if the migrator has valid
+	// schemaID, set the meta, otherwise we don't bother with schemaID.
 
 	// IF NOT EXISTS is available starting from 9.3 (TODO: get postgres'
 	// version; we'll need it to limit our support anyway)
