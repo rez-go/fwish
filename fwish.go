@@ -15,6 +15,7 @@ import (
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
 // implementations, for example, github.com/jmoiron/sqlx .
+//
 type DB interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
@@ -27,12 +28,17 @@ type LogOutputer interface {
 	Output(calldepth int, s string) error
 }
 
+// SourceMigration holds basic info about a migration obtained from
+// a source.
+//
 //TODO: interface so the source can lazy-checksum
 type SourceMigration struct {
 	Name     string
 	Checksum uint32
 }
 
+// Source is an abstract for migration sources.
+//
 type Source interface {
 	SchemaID() string
 	SchemaName() string
@@ -48,8 +54,9 @@ var (
 
 // Might want store the tx in here too
 type state struct {
-	schemaName    string
 	db            DB
+	schemaName    string
+	metaTableName string
 	validated     bool
 	installedRank int32
 }
@@ -70,9 +77,8 @@ type migration struct {
 // both of them.
 //TODO: make safe for concurrent usage?
 type Migrator struct {
-	schemaName    string //TODO: any actual use?
-	schemaID      string
-	metaTableName string
+	schemaName string //TODO: any actual use?
+	schemaID   string
 
 	migrations []migration     //TODO: list of {version, name, src} sorted by rank
 	versions   map[string]bool // map to rank / index? to migration?
@@ -92,17 +98,15 @@ func NewMigrator(schemaID string) (*Migrator, error) {
 	schemaID = strings.TrimSpace(schemaID)
 
 	m := &Migrator{
-		schemaID:      schemaID,
-		metaTableName: "schema_version",
+		schemaID: schemaID,
 	}
-
-	//TODO: inspect the source files
-	//TODO: lazy load. don't load the source before we receive
-	// the command.
 
 	return m, nil
 }
 
+// WithLogger sets non-structured logger. It accepts Logger from Go's
+// built-in package.
+//
 //TODO: logging level
 func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 	m.logger = logger
@@ -111,6 +115,9 @@ func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 
 // AddSource register a migrations provider. The source must have the same
 // schema ID as the migrator.
+//
+// All the migrations from all sources will be compiled.
+//
 func (m *Migrator) AddSource(src Source) error {
 	//TODO: everytime this function is called, we inspect the new source
 	// and get info about all migrations it contained and insert those
@@ -134,7 +141,7 @@ func (m *Migrator) AddSource(src Source) error {
 
 	ml, err := src.Migrations()
 	if err != nil {
-		return errors.Wrap(err, "fwish: unable to get source's migration names")
+		return errors.Wrap(err, "fwish: unable to get source's migrations")
 	}
 
 	if m.versions == nil {
@@ -156,11 +163,11 @@ func (m *Migrator) AddSource(src Source) error {
 		}
 		idx := strings.Index(mn, versionSep)
 		if idx == -1 {
-			//TODO: could we have name without the description?
+			//TODO: could we have name without the label part?
 			return errors.Errorf("fwish: invalid migration name %q", mn)
 		}
 		vraw := mn[:idx]
-		//TODO: replace the underscore with space and do other stuff
+		//TODO: label processing
 		label := strings.TrimSpace(
 			strings.Replace(
 				mn[idx+len(versionSep):len(mn)-len(suffix)], "_", " ", -1))
@@ -170,7 +177,8 @@ func (m *Migrator) AddSource(src Source) error {
 			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
 		}
 
-		//TODO: we might want to support underscore for compatibility
+		//TODO: we might want to support underscore for compatibility.
+		// some source might using class name for the migration name.
 		vps := strings.Split(vstr, ".")
 		vints := make([]int64, len(vps))
 		for i, sv := range vps {
@@ -185,6 +193,7 @@ func (m *Migrator) AddSource(src Source) error {
 		for i, iv := range vints {
 			sl[i] = strconv.FormatInt(iv, 10)
 		}
+		// Build normalized string
 		vstr = strings.Join(sl, ".")
 
 		if _, ok := m.versions[vstr]; ok {
@@ -204,9 +213,6 @@ func (m *Migrator) AddSource(src Source) error {
 		})
 	}
 
-	//NOTE: this won't work intuitively
-	// try sorting
-	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
 	//TODO: test case for this
 	sort.Slice(m.migrations, func(i, j int) bool {
 		vlA := m.migrations[i].versionInts
@@ -246,14 +252,13 @@ func (m *Migrator) SchemaName() string { return m.schemaName }
 // found inside the meta file. The schema name corresponds the
 // Postgres database schema name.
 //
-//TODO: parameter might be something {DB, schemaName}
 //TODO: allow override meta table name too?
 //TODO: MigrateToRank, and MigrateToVersion ?
 func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	//TODO: validate the parameters
 	// - we should use regex for schemaName. [A-Za-z0-9_]
 	//TODO: use source's schemaName as the default?
-	st := &state{schemaName, db, false, -1}
+	st := &state{db, schemaName, "schema_version", false, -1}
 
 	var searchPath string
 	//TODO: get search path, set into specified schema, execute the
@@ -296,11 +301,8 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	}
 
 	_, err = st.db.Exec("SET search_path TO " + searchPath)
-	if err != nil {
-		return num, err
-	}
 
-	return num, nil
+	return num, err
 }
 
 // Status returns whether all the migrations have been applied.
@@ -314,100 +316,6 @@ func (m *Migrator) Status(db DB) (diff int, err error) {
 
 	return 0, errors.New("not implemented yet")
 }
-
-// func (m *Migrator) ensureSourceFilesScanned() error {
-// 	if m.source.scanned {
-// 		return nil
-// 	}
-// 	_, err := m.scanSourceDir()
-// 	return err
-// }
-
-// returns the number of files?
-// func (m *Migrator) scanSourceDir() (numFiles int, err error) {
-// 	// We might want to make these configurable
-// 	ignorePrefix := "_"
-// 	suffix := ".sql"
-// 	versionSep := "__"
-
-// 	numFiles = 0
-// 	m.source.files = make(map[string]sourceFile)
-// 	m.source.sortedFilenames = nil
-
-// 	fl, err := ioutil.ReadDir(m.source.url)
-// 	if err != nil {
-// 		return 0, err //TODO: handle no such file (and wrap the error)
-// 	}
-
-// 	for _, entry := range fl {
-// 		fname := entry.Name()
-
-// 		if strings.HasPrefix(fname, ignorePrefix) {
-// 			continue
-// 		}
-// 		if !strings.HasSuffix(fname, suffix) {
-// 			continue
-// 		}
-
-// 		if idx := strings.Index(fname, versionSep); idx > 0 {
-// 			vstr := fname[:idx]
-// 			//TODO: replace the underscore with space and do other stuff
-// 			label := fname[idx+len(versionSep) : len(fname)-len(suffix)]
-
-// 			//TODO: get the first line of comment as the desc
-// 			cksum, err := m.checksumSourceFile(filepath.Join(m.source.url, fname))
-// 			if err != nil {
-// 				panic(err)
-// 			}
-// 			if cksum == 0 {
-// 				//TODO: check the reference behavior
-// 				continue
-// 			}
-
-// 			//TODO: inspect the file?
-// 			//TODO: ensure no files with the same version
-// 			if _, ok := m.source.files[vstr]; ok {
-// 				//TODO: write test case for this
-// 				return 0, errors.Errorf("fwish: version %q duplicated", vstr)
-// 			}
-
-// 			m.source.files[vstr] = sourceFile{
-// 				version:  vstr,
-// 				label:    label,
-// 				filename: fname,
-// 				checksum: cksum,
-// 			}
-// 			m.source.sortedFilenames = append(m.source.sortedFilenames, vstr)
-// 		}
-// 	}
-
-// 	//NOTE: this won't work intuitively
-// 	// try sorting
-// 	// "V1", "V100", "V1.0", "V1.2", "V1.3-test", "V2", "V10", "V001", "V002", "V200"
-// 	sort.Strings(m.source.sortedFilenames)
-
-// 	m.source.scanned = true
-
-// 	return len(m.source.sortedFilenames), nil
-// }
-
-// func (m *Migrator) checksumSourceFile(filename string) (uint32, error) {
-// 	fh, err := os.Open(filename)
-// 	if err != nil {
-// 		return 0, errors.Wrap(err, "fwish: unable opening file for checksum")
-// 	}
-// 	defer fh.Close()
-
-// 	scanner := bufio.NewScanner(fh)
-// 	scanner.Split(bufio.ScanLines)
-
-// 	ck := crc32.NewIEEE()
-// 	for scanner.Scan() {
-// 		ck.Write(scanner.Bytes())
-// 	}
-
-// 	return ck.Sum32(), nil
-// }
 
 //TODO: if the meta table does not exist or there's no revision but the schema already
 // has other tables, we should return error.
@@ -443,7 +351,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	// return an error?
 	err = st.db.QueryRow(fmt.Sprintf(
 		`SELECT script FROM %s.%s WHERE installed_rank=0`,
-		st.schemaName, m.metaTableName,
+		st.schemaName, st.metaTableName,
 	)).Scan(&idstr)
 	if err == nil {
 		if idstr != m.schemaID {
@@ -460,11 +368,11 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 
 		// 42P01: undefined_table
 		if pqErr.Code != "42P01" ||
-			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+m.metaTableName+`"`) {
+			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metaTableName+`"`) {
 			return fmt.Errorf("fwish: unexpected error (%v)", pqErr)
 		}
 
-		_, err := st.db.Exec(fmt.Sprintf(
+		_, err = st.db.Exec(fmt.Sprintf(
 			`CREATE TABLE %s.%s (
 				installed_rank integer NOT NULL,
 				version character varying(50),
@@ -478,7 +386,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 				success boolean NOT NULL,
 				CONSTRAINT %s_pk PRIMARY KEY (installed_rank)
 			)`,
-			st.schemaName, m.metaTableName, m.metaTableName,
+			st.schemaName, st.metaTableName, st.metaTableName,
 		))
 		if err != nil {
 			return err
@@ -502,7 +410,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 				execution_time,
 				success )
 			VALUES (0,$1,$2,'meta',$3,0,$4,$5,0,true)`,
-			st.schemaName, m.metaTableName,
+			st.schemaName, st.metaTableName,
 		),
 		"0", st.schemaName, m.schemaID, "", time.Now().UTC(),
 	)
@@ -519,14 +427,12 @@ func (m *Migrator) validateDBSchema(st *state) error {
 	st.validated = false //
 	st.installedRank = -1
 
-	// if err := m.ensureSourceFilesScanned(); err != nil {
-	// 	return err
-	// }
+	//TODO: lazy-load source migration checksums
 
 	rows, err := st.db.Query(fmt.Sprintf(
 		`SELECT installed_rank, version, script, checksum, success
 		FROM %s.%s ORDER BY installed_rank`,
-		st.schemaName, m.metaTableName,
+		st.schemaName, st.metaTableName,
 	))
 	if err != nil {
 		pqErr, ok := err.(*pq.Error)
@@ -535,7 +441,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		}
 		// 42P01: undefined_table
 		if pqErr.Code != "42P01" ||
-			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+m.metaTableName+`"`) {
+			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metaTableName+`"`) {
 			return err
 		}
 		// Set the status as validated eventhough the schema has not been
@@ -603,7 +509,7 @@ func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
 		return err
 	}
 
-	dt := time.Now().Sub(tStart) / time.Millisecond
+	dt := time.Since(tStart) / time.Millisecond
 
 	//TODO: set desc and installed_by
 	_, err = st.db.Exec(
@@ -620,7 +526,7 @@ func (m *Migrator) applySourceFile(st *state, rank int32, sf *migration) error {
 				execution_time,
 				success )
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
-			st.schemaName, m.metaTableName,
+			st.schemaName, st.metaTableName,
 		),
 		rank, sf.versionStr, sf.label, sf.name, sf.checksum, "", tStart.UTC(), dt,
 	)

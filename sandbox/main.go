@@ -58,6 +58,8 @@ func main() {
 	schemaName := "__fwishsandbox"
 
 	t0 := time.Now()
+	// t, err :=fwish.NewTarget(db, options)
+	// mg.Migrate(t)
 	n, err := mg.Migrate(db, schemaName)
 	if err != nil {
 		logger.Fatal(err)
@@ -68,6 +70,6 @@ func main() {
 			schemaName)
 	} else {
 		logger.Printf("Successfully applied %d migrations to schema %q (execution time %s)",
-			n, schemaName, time.Now().Sub(t0).String())
+			n, schemaName, time.Since(t0).String())
 	}
 }

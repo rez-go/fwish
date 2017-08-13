@@ -30,68 +30,62 @@ type sqlSource struct {
 	files      []fwish.SourceMigration
 }
 
+// Load creates a SQL-based migration source from specified URL.
 func Load(sourceURL string) (fwish.Source, error) {
 	src := sqlSource{url: sourceURL}
-	if err := src.loadMeta(); err != nil {
-		return nil, err
-	}
-	return &src, nil
-}
 
-func (s *sqlSource) loadMeta() error {
-	//TODO: might want to stream the content
+	//TODO: stream the content
 	fd, err := ioutil.ReadFile(
-		filepath.Join(s.url, "fwish.yaml"),
+		filepath.Join(src.url, "fwish.yaml"),
 	)
 	if err != nil {
 		if _, ok := err.(*os.PathError); !ok {
-			return errors.Wrap(err, "fwish: error opening source meta file")
+			return nil, errors.Wrap(err, "fwish.sql: error opening source meta file")
 		}
 		// Try other name
 		fd, err = ioutil.ReadFile(
-			filepath.Join(s.url, "schema.yaml"),
+			filepath.Join(src.url, "schema.yaml"),
 		)
 		if err != nil {
-			return errors.Wrap(err, "fwish: unable to open any source meta file")
+			return nil, errors.Wrap(err, "fwish.sql: unable to open any source meta file")
 		}
 	}
 
-	//TODO: cache
 	meta := sqlSourceMeta{}
 	if err := yaml.Unmarshal(fd, &meta); err != nil {
-		return errors.Wrap(err, "fwish: unable to load source meta file")
+		return nil, errors.Wrap(err, "fwish.sql: unable to load meta file")
 	}
 
-	s.schemaID = meta.ID
-	s.schemaName = meta.Name
+	src.schemaID = meta.ID
+	src.schemaName = meta.Name
 
-	return nil
+	return &src, nil
 }
 
-func (s *sqlSource) SchemaID() string {
-	return s.schemaID
+func (src *sqlSource) SchemaID() string {
+	return src.schemaID
 }
 
-func (s *sqlSource) SchemaName() string {
-	return s.schemaName
+func (src *sqlSource) SchemaName() string {
+	return src.schemaName
 }
 
-func (s *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
-	if !s.scanned {
-		_, err := s.scanSourceDir()
+func (src *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
+	if !src.scanned {
+		_, err := src.scanSourceDir()
 		if err != nil {
 			return nil, err
 		}
 	}
-	return s.files, nil
+	return src.files, nil
 }
 
-func (s *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) error {
+func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) error {
 	//TODO: ensure that the it's our migration
 	//TODO: load all the content, checksum, then execute
-	fh, err := os.Open(filepath.Join(s.url, sm.Name))
+	fh, err := os.Open(filepath.Join(src.url, sm.Name))
 	if err != nil {
-		panic(err)
+		return errors.Wrap(err, "fwish.sql: unable to load migration file")
 	}
 	defer fh.Close()
 
@@ -107,7 +101,7 @@ func (s *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) erro
 
 	if sm.Checksum != ck.Sum32() {
 		//TODO: more informative message
-		return errors.Errorf("fwish: bad source checksum %q", sm.Name)
+		return errors.Errorf("fwish.sql: bad migration file checksum %q", sm.Name)
 	}
 
 	_, err = db.Exec(script)
@@ -119,21 +113,18 @@ func (s *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) erro
 }
 
 // returns the number of files?
-func (s *sqlSource) scanSourceDir() (numFiles int, err error) {
-	// We might want to make these configurable
-	sfx := s.fileSuffix
+func (src *sqlSource) scanSourceDir() (numFiles int, err error) {
+	sfx := src.fileSuffix
 	if sfx == "" {
 		sfx = ".sql"
 	}
 	ignorePrefix := "_"
-	versionSep := "__"
 
-	numFiles = 0
-	s.files = nil
+	src.files = nil
 
-	fl, err := ioutil.ReadDir(s.url)
+	fl, err := ioutil.ReadDir(src.url)
 	if err != nil {
-		return 0, err //TODO: handle no such file (and wrap the error)
+		return 0, errors.Wrap(err, "fwish.sql: unable to read migration directory")
 	}
 
 	for _, entry := range fl {
@@ -146,44 +137,32 @@ func (s *sqlSource) scanSourceDir() (numFiles int, err error) {
 			continue
 		}
 
-		if idx := strings.Index(fname, versionSep); idx > 0 {
-			// vstr := fname[:idx]
-			// //TODO: replace the underscore with space and do other stuff
-			// label := fname[idx+len(versionSep) : len(fname)-len(sfx)]
-
-			//TODO: get the first line of comment as the desc
-			cksum, err := s.checksumSourceFile(filepath.Join(s.url, fname))
-			if err != nil {
-				panic(err)
-			}
-			if cksum == 0 {
-				//TODO: check the reference behavior
-				continue
-			}
-
-			//TODO: inspect the file?
-			//TODO: ensure no files with the same version
-			// if _, ok := s.files[vstr]; ok {
-			// 	//TODO: write test case for this
-			// 	return 0, errors.Errorf("fwish: version %q duplicated", vstr)
-			// }
-
-			s.files = append(s.files, fwish.SourceMigration{
-				Name:     fname,
-				Checksum: cksum,
-			})
+		//TODO: we can optimize this by using goroutines
+		cksum, err := src.checksumSourceFile(filepath.Join(src.url, fname))
+		if err != nil {
+			return 0, err
 		}
+		if cksum == 0 {
+			// Empty file
+			//TODO: check the reference behavior
+			continue
+		}
+
+		src.files = append(src.files, fwish.SourceMigration{
+			Name:     fname,
+			Checksum: cksum,
+		})
 	}
 
-	s.scanned = true
+	src.scanned = true
 
-	return len(s.files), nil
+	return len(src.files), nil
 }
 
-func (s *sqlSource) checksumSourceFile(filename string) (uint32, error) {
+func (src *sqlSource) checksumSourceFile(filename string) (uint32, error) {
 	fh, err := os.Open(filename)
 	if err != nil {
-		return 0, errors.Wrap(err, "fwish: unable opening file for checksum")
+		return 0, errors.Wrap(err, "fwish.sql: unable to load migration file")
 	}
 	defer fh.Close()
 
