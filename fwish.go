@@ -32,23 +32,23 @@ type LogOutputer interface {
 	Output(calldepth int, s string) error
 }
 
-// SourceMigration holds basic info about a migration obtained from
+// MigrationInfo holds basic info about a migration obtained from
 // a source.
 //
 //TODO: interface so the source can lazy-checksum
-type SourceMigration struct {
+type MigrationInfo struct {
 	Name     string
 	Script   string
 	Checksum uint32
 }
 
-// Source is an abstract for migration sources.
+// MigrationSource is an abstraction for migration sources.
 //
-type Source interface {
+type MigrationSource interface {
 	SchemaID() string
 	SchemaName() string
-	Migrations() ([]SourceMigration, error)
-	ExecuteMigration(db DB, migration SourceMigration) error //TODO: use context and Tx
+	Migrations() ([]MigrationInfo, error)
+	ExecuteMigration(db DB, migration MigrationInfo) error //TODO: use context and Tx
 }
 
 var (
@@ -67,14 +67,13 @@ type state struct {
 }
 
 type migration struct {
-	versionRaw  string
 	versionStr  string
 	versionInts []int64
 	label       string
 	name        string
 	script      string
 	checksum    uint32
-	source      Source
+	source      MigrationSource
 }
 
 // Migrator is the ..
@@ -86,7 +85,7 @@ type Migrator struct {
 	schemaID   string
 	schemaName string //TODO: any actual use?
 
-	sources    []Source
+	sources    []MigrationSource
 	migrations []migration     //TODO: list of {version, name, src} sorted by rank
 	versions   map[string]bool // map to rank / index? to migration?
 
@@ -121,7 +120,7 @@ func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 //
 // All the migrations from all sources will be compiled.
 //
-func (m *Migrator) AddSource(src Source) error {
+func (m *Migrator) AddSource(src MigrationSource) error {
 	//TODO: everytime this function is called, we inspect the new source
 	// and get info about all migrations it contained and insert those
 	// migrations into our master list based on the ranks.
@@ -153,52 +152,37 @@ func (m *Migrator) AddSource(src Source) error {
 		m.versions = make(map[string]bool)
 	}
 
-	//TODO: dupe
-	versionSep := "__"
-	versionPrefix := "V"
+	migrationVersionSeparator := "__"
+	migrationVersionedPrefix := "V"
 
 	for _, mi := range ml {
 		//TODO: validate things!
 		// version string is [0-9\.] with underscore deprecated
 		mn := mi.Name
 		//TODO: repeatable
-		if !strings.HasPrefix(mn, versionPrefix) {
+		if !strings.HasPrefix(mn, migrationVersionedPrefix) {
 			return errors.Errorf("fwish: migration name %q has invalid prefix", mn)
 		}
-		idx := strings.Index(mn, versionSep)
+		idx := strings.Index(mn, migrationVersionSeparator)
 		if idx == -1 {
 			//TODO: could we have name without the label part?
 			return errors.Errorf("fwish: invalid migration name %q", mn)
 		}
-		vraw := mn[:idx]
+		vstr := mn[:idx]
 		//TODO: label processing
 		label := strings.TrimSpace(
 			strings.Replace(
-				mn[idx+len(versionSep):], "_", " ", -1))
+				mn[idx+len(migrationVersionSeparator):], "_", " ", -1))
 
-		vstr := vraw[len(versionPrefix):]
+		vstr = vstr[len(migrationVersionedPrefix):]
 		if vstr == "" {
 			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
 		}
 
-		//TODO: we might want to support underscore for compatibility.
-		// some source might using class name for the migration name.
-		vps := strings.Split(vstr, ".")
-		vints := make([]int64, len(vps))
-		for i, sv := range vps {
-			iv, err := strconv.ParseInt(strings.TrimLeft(sv, "0"), 10, 64)
-			if err != nil {
-				return errors.Errorf("fwish: migration version %q contains invalid value", vraw)
-			}
-			vints[i] = iv
+		vstr, vints, err := m.parseVersion(vstr)
+		if err != nil {
+			return err
 		}
-
-		sl := make([]string, len(vints))
-		for i, iv := range vints {
-			sl[i] = strconv.FormatInt(iv, 10)
-		}
-		// Build normalized string
-		vstr = strings.Join(sl, ".")
 
 		if _, ok := m.versions[vstr]; ok {
 			//TODO: test case for this
@@ -207,7 +191,6 @@ func (m *Migrator) AddSource(src Source) error {
 		m.versions[vstr] = true
 
 		m.migrations = append(m.migrations, migration{
-			versionRaw:  vraw,
 			versionStr:  vstr,
 			versionInts: vints,
 			label:       label,
@@ -311,9 +294,14 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		num++
 	}
 
-	_, err = st.db.Exec("SET search_path TO " + searchPath)
+	if searchPath != "" {
+		_, err = st.db.Exec("SET search_path TO " + searchPath)
+		if err != nil {
+			return num, err
+		}
+	}
 
-	return num, err
+	return num, nil
 }
 
 // Status returns whether all the migrations have been applied.
@@ -506,17 +494,14 @@ func (m *Migrator) validateDBSchema(st *state) error {
 
 		st.installedRank = i
 	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
 
-	return nil
+	return rows.Err()
 }
 
 func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error {
 	tStart := time.Now()
 
-	err := sf.source.ExecuteMigration(st.db, SourceMigration{
+	err := sf.source.ExecuteMigration(st.db, MigrationInfo{
 		Name:     sf.name,
 		Script:   sf.script,
 		Checksum: sf.checksum,
@@ -547,9 +532,27 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 		rank, sf.versionStr, sf.label, sf.script, sf.checksum, "", tStart.UTC(), dt,
 	)
 
-	if err != nil {
-		return err
+	return err
+}
+
+func (m *Migrator) parseVersion(vstr string) (normalized string, parts []int64, err error) {
+	//TODO: we might want to support underscore for compatibility.
+	// some source might using class name for the migration name.
+	vps := strings.Split(vstr, ".")
+	vints := make([]int64, len(vps))
+	for i, sv := range vps {
+		iv, err := strconv.ParseInt(strings.TrimLeft(sv, "0"), 10, 64)
+		if err != nil {
+			return "", nil, errors.Errorf("fwish: migration version %q contains invalid value", vstr)
+		}
+		vints[i] = iv
 	}
 
-	return nil
+	sl := make([]string, len(vints))
+	for i, iv := range vints {
+		sl[i] = strconv.FormatInt(iv, 10)
+	}
+	// Build normalized string
+	vstr = strings.Join(sl, ".")
+	return vstr, vints, nil
 }

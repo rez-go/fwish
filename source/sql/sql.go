@@ -27,7 +27,7 @@ type sqlSource struct {
 	url        string
 	fileSuffix string
 	scanned    bool
-	files      []fwish.SourceMigration
+	files      []fwish.MigrationInfo
 }
 
 // NewMigrator is a helper function to create a migrator if there's
@@ -49,7 +49,7 @@ func NewMigrator(schemaID string, sourceURL string) (*fwish.Migrator, error) {
 }
 
 // Load creates a SQL-based migration source from specified URL.
-func Load(sourceURL string) (fwish.Source, error) {
+func Load(sourceURL string) (fwish.MigrationSource, error) {
 	src := sqlSource{url: sourceURL}
 
 	//TODO: stream the content
@@ -88,7 +88,7 @@ func (src *sqlSource) SchemaName() string {
 	return src.schemaName
 }
 
-func (src *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
+func (src *sqlSource) Migrations() ([]fwish.MigrationInfo, error) {
 	if !src.scanned {
 		_, err := src.scanSourceDir()
 		if err != nil {
@@ -98,7 +98,7 @@ func (src *sqlSource) Migrations() ([]fwish.SourceMigration, error) {
 	return src.files, nil
 }
 
-func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) error {
+func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.MigrationInfo) error {
 	//TODO: ensure that the it's our migration
 	//TODO: load all the content, checksum, then execute
 	fh, err := os.Open(filepath.Join(src.url, sm.Script))
@@ -123,11 +123,7 @@ func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.SourceMigration) er
 	}
 
 	_, err = db.Exec(script)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // returns the number of files?
@@ -166,7 +162,7 @@ func (src *sqlSource) scanSourceDir() (numFiles int, err error) {
 			continue
 		}
 
-		src.files = append(src.files, fwish.SourceMigration{
+		src.files = append(src.files, fwish.MigrationInfo{
 			Name:     fname[:len(fname)-len(sfx)],
 			Script:   fname,
 			Checksum: cksum,
