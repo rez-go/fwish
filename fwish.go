@@ -3,13 +3,13 @@ package fwish
 import (
 	"database/sql"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
+
+	"github.com/exavolt/fwish/version"
 )
 
 //TODO: the DB's schemaID is the one with the highest authority. if the
@@ -88,8 +88,8 @@ type Migrator struct {
 	userID     string
 
 	sources    []MigrationSource
-	migrations []migration     //TODO: list of {version, name, src} sorted by rank
-	versions   map[string]bool // map to rank / index? to migration?
+	versions   []string
+	migrations map[string]migration
 
 	logger LogOutputer
 }
@@ -155,8 +155,8 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 		return errors.Wrap(err, "fwish: unable to get source's migrations")
 	}
 
-	if m.versions == nil {
-		m.versions = make(map[string]bool)
+	if m.migrations == nil {
+		m.migrations = make(map[string]migration)
 	}
 
 	migrationVersionSeparator := "__"
@@ -186,18 +186,16 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
 		}
 
-		vstr, vints, err := m.parseVersion(vstr)
+		vstr, vints, err := version.Parse(vstr)
 		if err != nil {
 			return err
 		}
 
-		if _, ok := m.versions[vstr]; ok {
+		if _, ok := m.migrations[vstr]; ok {
 			//TODO: test case for this
 			return errors.Errorf("fwish: duplicate version %q", vstr)
 		}
-		m.versions[vstr] = true
-
-		m.migrations = append(m.migrations, migration{
+		m.migrations[vstr] = migration{
 			versionStr:  vstr,
 			versionInts: vints,
 			label:       label,
@@ -205,29 +203,14 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 			script:      mi.Script,
 			checksum:    mi.Checksum,
 			source:      src,
-		})
+		}
+		m.versions = append(m.versions, vstr)
 	}
 
-	//TODO: test case for this
-	sort.Slice(m.migrations, func(i, j int) bool {
-		vlA := m.migrations[i].versionInts
-		vlB := m.migrations[j].versionInts
-		var mx int
-		if len(vlA) < len(vlB) {
-			mx = len(vlA)
-		} else {
-			mx = len(vlB)
-		}
-		for k := 0; k < mx; k++ {
-			if vlA[k] < vlB[k] {
-				return true
-			}
-			if vlA[k] > vlB[k] {
-				return false
-			}
-		}
-		return len(vlA) < len(vlB)
-	})
+	err = version.SortStrings(m.versions)
+	if err != nil {
+		return err
+	}
 
 	m.sources = append(m.sources, src)
 
@@ -280,9 +263,10 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	}
 
 	//TODO: use Tx
-	for i := int(st.installedRank); i < len(m.migrations); i++ {
-		sf := m.migrations[i]
+	for i := int(st.installedRank); i < len(m.versions); i++ {
+		sf := m.migrations[m.versions[i]]
 		if m.logger != nil {
+			// nolint: errcheck
 			m.logger.Output(2, fmt.Sprintf(
 				"Migrating schema %q to version %s - %s",
 				st.schemaName, sf.versionStr, sf.label,
@@ -466,7 +450,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 			panic("DB has failed migration")
 		}
 
-		if int(i) > len(m.migrations) {
+		if int(i) > len(m.versions) {
 			//TODO: a test for this case
 			return errors.New("fwish: DB has more migrations than the source")
 		}
@@ -475,7 +459,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 			continue
 		}
 
-		mig := m.migrations[i-1]
+		mig := m.migrations[m.versions[i-1]]
 
 		if mig.checksum != checksum {
 			//TODO: ensure the message has enough details
@@ -525,30 +509,4 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 	)
 
 	return err
-}
-
-func (m *Migrator) parseVersion(vstr string) (normalized string, parts []int64, err error) {
-	//TODO: we might want to support underscore for compatibility.
-	// some source might using class name for the migration name.
-	pl := strings.Split(vstr, ".")
-	if len(pl) == 1 {
-		// Try underscore
-		pl = strings.Split(vstr, "_")
-	}
-	vints := make([]int64, len(pl))
-	for i, sv := range pl {
-		// note that we don't need to trim left zeroes as we explicitly
-		// tell the parser that the number is a decimal.
-		iv, err := strconv.ParseInt(sv, 10, 64)
-		if err != nil {
-			return "", nil, errors.Errorf("fwish: version %q contains invalid value", vstr)
-		}
-		vints[i] = iv
-	}
-	// Convert them back to string
-	sl := make([]string, len(vints))
-	for i, iv := range vints {
-		sl[i] = strconv.FormatInt(iv, 10)
-	}
-	return strings.Join(sl, "."), vints, nil
 }

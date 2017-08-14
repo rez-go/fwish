@@ -113,7 +113,10 @@ func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.MigrationInfo) erro
 
 	ck := crc32.NewIEEE()
 	for scanner.Scan() {
-		ck.Write(scanner.Bytes())
+		_, err = ck.Write(scanner.Bytes())
+		if err != nil {
+			return err
+		}
 		script += scanner.Text() + "\n"
 	}
 
@@ -186,7 +189,10 @@ func (src *sqlSource) checksumSourceFile(filename string) (uint32, error) {
 
 	ck := crc32.NewIEEE()
 	for scanner.Scan() {
-		ck.Write(scanner.Bytes())
+		_, err = ck.Write(scanner.Bytes())
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	return ck.Sum32(), nil
