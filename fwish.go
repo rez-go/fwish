@@ -212,17 +212,13 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 	sort.Slice(m.migrations, func(i, j int) bool {
 		vlA := m.migrations[i].versionInts
 		vlB := m.migrations[j].versionInts
-		// There's at least one part
-		if vlA[0] < vlB[0] {
-			return true
-		}
 		var mx int
 		if len(vlA) < len(vlB) {
 			mx = len(vlA)
 		} else {
 			mx = len(vlB)
 		}
-		for k := 1; k < mx; k++ {
+		for k := 0; k < mx; k++ {
 			if vlA[k] < vlB[k] {
 				return true
 			}
