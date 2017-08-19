@@ -64,7 +64,7 @@ func SortStrings(versions []string) error {
 		}
 		items[i] = item{ints, s}
 	}
-	sort.Slice(items, func(i, j int) bool {
+	sort.SliceStable(items, func(i, j int) bool {
 		vlA := items[i].ints
 		vlB := items[j].ints
 		var mx int
