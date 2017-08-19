@@ -1,6 +1,7 @@
 package version_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/exavolt/fwish/version"
@@ -12,26 +13,36 @@ func TestParse(t *testing.T) {
 		normalized string
 		ints       []int64
 		err        error
+		errMsg     string
 	}{
-		{"", "", nil, nil},
-		{"1", "1", []int64{1}, nil},
-		{"0", "0", []int64{0}, nil},
-		{"001", "1", []int64{1}, nil},
-		{"000", "0", []int64{0}, nil},
-		{"1.0", "1.0", []int64{1, 0}, nil},
-		{"01.00", "1.0", []int64{1, 0}, nil},
+		{"", "", nil, nil, ""},
+		{"1", "1", []int64{1}, nil, ""},
+		{"0", "0", []int64{0}, nil, ""},
+		{"001", "1", []int64{1}, nil, ""},
+		{"000", "0", []int64{0}, nil, ""},
+		{"1.0", "1.0", []int64{1, 0}, nil, ""},
+		{"01.00", "1.0", []int64{1, 0}, nil, ""},
+		{"a", "", nil, nil, "invalid version syntax"},
 	}
 
 	for i, c := range cases {
 		s, il, err := version.Parse(c.input)
 		if err != nil {
-			if c.err == nil {
-				t.Errorf("#%d: expected %v, got %v", i+1, c.err, err)
-			} else if err.Error() != c.err.Error() {
-				t.Errorf("#%d: expected %q, got %q", i+1, c.err.Error(), err.Error())
+			if c.err != nil {
+				if c.err != err {
+					t.Errorf("#%d: expected %v, got %v", i+1, c.err, err)
+				}
+			} else if c.errMsg != "" {
+				if !strings.Contains(err.Error(), c.errMsg) {
+					t.Errorf("#%d: expected %s, got %s", i+1, c.errMsg, err.Error())
+				}
+			} else {
+				t.Errorf("#%d: expected no errors, got %v", i+1, err)
 			}
 		} else if c.err != nil {
-			t.Errorf("#%d: expected %v, got %v", i+1, c.err, err)
+			t.Errorf("#%d: expected %v, got no errors", i+1, c.err)
+		} else if c.errMsg != "" {
+			t.Errorf("#%d: expected %s, got no errors", i+1, c.errMsg)
 		}
 		if s != c.normalized {
 			t.Errorf("#%d: expected %q, got %q", i+1, c.normalized, s)

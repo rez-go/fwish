@@ -30,7 +30,10 @@ func Parse(vstr string) (normalized string, ints []int64, err error) {
 		// tell the parser that the number is a decimal.
 		iv, err := strconv.ParseInt(sv, 10, 64)
 		if err != nil {
-			return "", nil, fmt.Errorf("fwish.version: version string %q contains invalid value", vstr)
+			if strings.HasSuffix(err.Error(), " invalid syntax") {
+				return "", nil, fmt.Errorf("fwish.version: invalid version syntax")
+			}
+			return "", nil, err
 		}
 		ints[i] = iv
 	}
