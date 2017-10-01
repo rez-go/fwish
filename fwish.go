@@ -9,7 +9,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 
-	"github.com/exavolt/fwish/version"
+	"bitbucket.org/exavolt/fwish/version"
 )
 
 //TODO: the DB's schemaID is the one with the highest authority. if the

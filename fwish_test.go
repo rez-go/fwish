@@ -6,8 +6,8 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/exavolt/fwish"
-	sqlsource "github.com/exavolt/fwish/source/sql"
+	"bitbucket.org/exavolt/fwish"
+	sqlsource "bitbucket.org/exavolt/fwish/source/sql"
 )
 
 type sourceConflict struct {

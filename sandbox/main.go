@@ -8,8 +8,8 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/exavolt/fwish"
-	sqlsource "github.com/exavolt/fwish/source/sql"
+	"bitbucket.org/exavolt/fwish"
+	sqlsource "bitbucket.org/exavolt/fwish/source/sql"
 )
 
 func main() {

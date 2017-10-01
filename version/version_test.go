@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/exavolt/fwish/version"
+	"bitbucket.org/exavolt/fwish/version"
 )
 
 func TestParse(t *testing.T) {

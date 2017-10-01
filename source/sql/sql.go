@@ -11,7 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 
-	"github.com/exavolt/fwish"
+	"bitbucket.org/exavolt/fwish"
 )
 
 //TODO: dialect / engine etc.
