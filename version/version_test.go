@@ -26,7 +26,7 @@ func TestParse(t *testing.T) {
 	}
 
 	for i, c := range cases {
-		s, il, err := version.Parse(c.input)
+		il, err := version.Parse(c.input)
 		if err != nil {
 			if c.err != nil {
 				if c.err != err {
@@ -44,8 +44,8 @@ func TestParse(t *testing.T) {
 		} else if c.errMsg != "" {
 			t.Errorf("#%d: expected %s, got no errors", i+1, c.errMsg)
 		}
-		if s != c.normalized {
-			t.Errorf("#%d: expected %q, got %q", i+1, c.normalized, s)
+		if il.String() != c.normalized {
+			t.Errorf("#%d: expected %q, got %q", i+1, c.normalized, il.String())
 		}
 		if !intsEq(c.ints, il) {
 			t.Errorf("#%d: ints are inequal", i+1)
@@ -64,8 +64,8 @@ func TestSort(t *testing.T) {
 		{[]string{"2", "1"}, []string{"1", "2"}, nil},
 		{[]string{"1.1", "1", "1.2", "1.0"}, []string{"1", "1.0", "1.1", "1.2"}, nil},
 		{
-			[]string{"002.002", "10", "1", "2", "3.10", "3.1", "3", "4_2"},
-			[]string{"1", "2", "002.002", "3", "3.1", "3.10", "4_2", "10"},
+			[]string{"002.0002", "10", "1", "2", "3.10", "3.1", "3", "4_2"},
+			[]string{"1", "2", "002.0002", "3", "3.1", "3.10", "4_2", "10"},
 			nil,
 		},
 	}

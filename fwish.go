@@ -15,6 +15,7 @@ import (
 //TODO: the DB's schemaID is the one with the highest authority. if the
 // DB has it, the migrator and the source must provide matching schema ids.
 //TODO: consider utilizing context.Context
+//TODO: version assertion
 
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
@@ -164,9 +165,9 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 
 	for _, mi := range ml {
 		//TODO: validate things!
-		// version string is [0-9\.] with underscore deprecated
+		// version string is [0-9\.]
 		mn := mi.Name
-		//TODO: repeatable
+		//TODO: support for repeatables
 		if !strings.HasPrefix(mn, migrationVersionedPrefix) {
 			return errors.Errorf("fwish: migration name %q has invalid prefix", mn)
 		}
@@ -186,14 +187,19 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
 		}
 
-		vstr, vints, err := version.Parse(vstr)
+		vints, err := version.Parse(vstr)
 		if err != nil {
 			return err
 		}
+		vstr = vints.String()
+		if vstr == "" {
+			// This would be an internal error
+			return errors.Errorf("fwish: migration %q has empty version", mn)
+		}
 
-		if _, ok := m.migrations[vstr]; ok {
+		if cv, ok := m.migrations[vstr]; ok {
 			//TODO: test case for this
-			return errors.Errorf("fwish: duplicate version %q", vstr)
+			return errors.Errorf("fwish: version %q conflict (%q, %q)", vstr, cv.name, mn)
 		}
 		m.migrations[vstr] = migration{
 			versionStr:  vstr,

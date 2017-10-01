@@ -7,42 +7,49 @@ import (
 	"strings"
 )
 
-//TODO: probably should create type for the ints
-// type Version []int64
+// Version holds info of parsed version
+type Version []int64
+
+// String returns a normalized string
+func (v Version) String() string {
+	if len(v) == 0 {
+		return ""
+	}
+	sl := make([]string, len(v))
+	for i, iv := range v {
+		sl[i] = strconv.FormatInt(iv, 10)
+	}
+	return strings.Join(sl, ".")
+}
 
 // Parse parses a string and returns a normalized string and a list of
 // int64.
 //
-func Parse(vstr string) (normalized string, ints []int64, err error) {
+func Parse(vstr string) (Version, error) {
 	if vstr == "" {
-		return "", nil, nil
+		return nil, nil
 	}
-	//TODO: we might want to support underscore for compatibility.
-	// some source might using class name for the migration name.
 	pl := strings.Split(vstr, ".")
 	if len(pl) == 1 {
 		// Try underscore
+		// We support underscore for compatibility.
+		// some sources might using class name for the migration name.
 		pl = strings.Split(vstr, "_")
 	}
-	ints = make([]int64, len(pl))
+	ints := make([]int64, len(pl))
 	for i, sv := range pl {
 		// note that we don't need to trim left zeroes as we explicitly
 		// tell the parser that the number is a decimal.
 		iv, err := strconv.ParseInt(sv, 10, 64)
 		if err != nil {
 			if strings.HasSuffix(err.Error(), " invalid syntax") {
-				return "", nil, fmt.Errorf("fwish.version: invalid version syntax")
+				return nil, fmt.Errorf("fwish.version: invalid version syntax")
 			}
-			return "", nil, err
+			return nil, err
 		}
 		ints[i] = iv
 	}
-	// Convert them back to string
-	sl := make([]string, len(ints))
-	for i, iv := range ints {
-		sl[i] = strconv.FormatInt(iv, 10)
-	}
-	return strings.Join(sl, "."), ints, nil
+	return Version(ints), nil
 }
 
 // SortStrings sort a list of version string.
@@ -53,20 +60,20 @@ func SortStrings(versions []string) error {
 		return nil
 	}
 	type item struct {
-		ints []int64
-		str  string
+		v    Version
+		orig string
 	}
 	items := make([]item, len(versions))
 	for i, s := range versions {
-		_, ints, err := Parse(s)
+		v, err := Parse(s)
 		if err != nil {
 			return err
 		}
-		items[i] = item{ints, s}
+		items[i] = item{v, s}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		vlA := items[i].ints
-		vlB := items[j].ints
+		vlA := items[i].v
+		vlB := items[j].v
 		var mx int
 		if len(vlA) < len(vlB) {
 			mx = len(vlA)
@@ -84,7 +91,7 @@ func SortStrings(versions []string) error {
 		return len(vlA) < len(vlB)
 	})
 	for i, it := range items {
-		versions[i] = it.str
+		versions[i] = it.orig
 	}
 	return nil
 }

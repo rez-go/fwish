@@ -2,7 +2,7 @@ package fwish_test
 
 import (
 	"database/sql"
-	"strings"
+	"os"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -19,11 +19,20 @@ import (
 // - test with SQLs which use schema explicitly (other than defined schema)
 // - test multiple sources
 
-const dsn = "postgres:///?sslmode=disable"
+var testDBDSN = "postgres:///?sslmode=disable"
 
 // The schema name we use in the tests. This schema will be dropped
 // and recreated multiple times.
-const testSchemaName = "__fwishtest"
+var testDBSchemaName = "__fwishtest"
+
+func init() {
+	if s, exists := os.LookupEnv("TEST_DB_DSN"); exists {
+		testDBDSN = s
+	}
+	if s, exists := os.LookupEnv("TEST_DB_SCHEMA_NAME"); exists {
+		testDBSchemaName = s
+	}
+}
 
 // Very basic functional test
 func TestBasic(t *testing.T) {
@@ -40,23 +49,23 @@ func TestBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("postgres", testDBDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`DROP SCHEMA IF EXISTS ` + testSchemaName + ` CASCADE`)
+	_, err = db.Exec(`DROP SCHEMA IF EXISTS ` + testDBSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	//TODO: check the number of applied migrations
-	_, err = mg.Migrate(db, testSchemaName)
+	_, err = mg.Migrate(db, testDBSchemaName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	//TODO: validate
 	// Apply the migration again
-	n, err := mg.Migrate(db, testSchemaName)
+	n, err := mg.Migrate(db, testDBSchemaName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +74,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	//TODO: should be a defered statement
-	_, err = db.Exec(`DROP SCHEMA ` + testSchemaName + ` CASCADE`)
+	_, err = db.Exec(`DROP SCHEMA ` + testDBSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,23 +96,23 @@ func TestBasicSQLX(t *testing.T) {
 	}
 
 	// The only difference
-	db, err := sqlx.Open("postgres", dsn)
+	db, err := sqlx.Open("postgres", testDBDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`DROP SCHEMA IF EXISTS ` + testSchemaName + ` CASCADE`)
+	_, err = db.Exec(`DROP SCHEMA IF EXISTS ` + testDBSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	//TODO: check the number of applied migrations
-	_, err = mg.Migrate(db, testSchemaName)
+	_, err = mg.Migrate(db, testDBSchemaName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	//TODO: validate
 	// Apply the migration again
-	n, err := mg.Migrate(db, testSchemaName)
+	n, err := mg.Migrate(db, testDBSchemaName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,43 +121,13 @@ func TestBasicSQLX(t *testing.T) {
 	}
 
 	//TODO: should be a defered statement
-	_, err = db.Exec(`DROP SCHEMA ` + testSchemaName + ` CASCADE`)
+	_, err = db.Exec(`DROP SCHEMA ` + testDBSchemaName + ` CASCADE`)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestSchemaID(t *testing.T) {
-	// Match: source-program
-	mg, err := fwish.NewMigrator("372ce18d-02a2-4cb1-828a-bb470f02fe6e")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err := sqlsource.Load("./test-data/basic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = mg.AddSource(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Mismatch: source-program
-	mg, err = fwish.NewMigrator("myapp.example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err = sqlsource.Load("./test-data/basic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = mg.AddSource(src)
-	if err == nil {
-		t.Error("error expected")
-	} else if !strings.Contains(err.Error(), "schema ID mismatch") {
-		t.Error(err)
-	}
-
 	//TODO: test the one in the DB
 }
 
