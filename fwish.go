@@ -21,6 +21,7 @@ import (
 // We have this abstraction so that people can use stdlib-compatible
 // implementations, for example, github.com/jmoiron/sqlx .
 type DB interface {
+	Begin() (*sql.Tx, error)
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
@@ -294,82 +295,70 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	// }
 	// st.schemaInit = true
 
-	//TODO: all these things should be inside a transaction
-	//TODO: if the meta table does not exist or there's no revision but
-	// the schema already has other tables, we should return error.
-	//TODO: if the DB has no schema meta but already has entries,
-	// we assume that it's a from fw. if the migrator has valid
-	// schemaID, set the meta, otherwise we don't bother with schemaID.
+	err := doTx(st.db, func(tx *sql.Tx) error {
+		//TODO: if the meta table does not exist or there's no revision but
+		// the schema already has other tables, we should return error.
+		//TODO: if the DB has no schema meta but already has entries,
+		// we assume that it's a from fw. if the migrator has valid
+		// schemaID, set the meta, otherwise we don't bother with schemaID.
 
-	// IF NOT EXISTS is available starting from 9.3 (TODO: get postgres'
-	// version; we'll need it to limit our support anyway)
-	// Let's try to create the schema away.
-	_, err := st.db.Exec(fmt.Sprintf(
-		`CREATE SCHEMA IF NOT EXISTS %s`,
-		st.schemaName,
-	))
-	if err != nil {
-		pqErr, ok := err.(*pq.Error)
-		if !ok {
-			return err
-		}
-		if pqErr.Code != "42P06" || !strings.Contains(pqErr.Message,
-			`"`+st.schemaName+`"`) {
-			return pqErr
-		}
-	}
-
-	var idstr string
-
-	err = st.db.QueryRow(fmt.Sprintf(
-		`SELECT script FROM %s.%s WHERE installed_rank=0`,
-		st.schemaName, st.metaTableName,
-	)).Scan(&idstr)
-	if err == nil {
-		if idstr != m.schemaID {
-			return ErrSchemaIDMismatch
-		}
-		return nil
-	}
-
-	if err != sql.ErrNoRows {
-		pqErr, ok := err.(*pq.Error)
-		if !ok {
-			return fmt.Errorf("fwish: unexpected error type: %w", err)
+		_, err := tx.Exec(fmt.Sprintf(
+			`CREATE SCHEMA IF NOT EXISTS %s`,
+			st.schemaName,
+		))
+		if err != nil {
+			pqErr, ok := err.(*pq.Error)
+			if !ok {
+				return err
+			}
+			if pqErr.Code != "42P06" || !strings.Contains(pqErr.Message,
+				`"`+st.schemaName+`"`) {
+				return pqErr
+			}
 		}
 
-		// 42P01: undefined_table
-		if pqErr.Code != "42P01" ||
-			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metaTableName+`"`) {
-			return fmt.Errorf("fwish: unexpected error: %w", pqErr)
-		}
-
-		_, err = st.db.Exec(fmt.Sprintf(
-			`CREATE TABLE %s.%s (
-				installed_rank integer NOT NULL,
-				version character varying(50),
-				description character varying(200) NOT NULL,
-				type character varying(20) NOT NULL,
-				script character varying(1000) NOT NULL,
-				checksum integer,
-				installed_by character varying(100) NOT NULL,
-				installed_on timestamp without time zone NOT NULL DEFAULT now(),
-				execution_time integer NOT NULL,
-				success boolean NOT NULL,
-				CONSTRAINT %s_pk PRIMARY KEY (installed_rank)
-			)`,
+		_, err = tx.Exec(fmt.Sprintf(
+			`CREATE TABLE IF NOT EXISTS %s.%s (
+			installed_rank integer NOT NULL,
+			version character varying(50),
+			description character varying(200) NOT NULL,
+			type character varying(20) NOT NULL,
+			script character varying(1000) NOT NULL,
+			checksum integer,
+			installed_by character varying(100) NOT NULL,
+			installed_on timestamp without time zone NOT NULL DEFAULT now(),
+			execution_time integer NOT NULL,
+			success boolean NOT NULL,
+			CONSTRAINT %s_pk PRIMARY KEY (installed_rank)
+		)`,
 			st.schemaName, st.metaTableName, st.metaTableName,
 		))
 		if err != nil {
 			return err
 		}
-	}
 
-	//TODO: ensure indexes
+		var idstr string
 
-	_, err = st.db.Exec(
-		fmt.Sprintf(
-			`INSERT INTO %s.%s (
+		err = tx.QueryRow(fmt.Sprintf(
+			`SELECT script FROM %s.%s WHERE installed_rank=0`,
+			st.schemaName, st.metaTableName,
+		)).Scan(&idstr)
+		if err == nil {
+			if idstr != m.schemaID {
+				return ErrSchemaIDMismatch
+			}
+			return nil
+		}
+
+		if err != sql.ErrNoRows {
+			return err
+		}
+
+		//TODO: ensure indexes
+
+		_, err = tx.Exec(
+			fmt.Sprintf(
+				`INSERT INTO %s.%s (
 				installed_rank,
 				version,
 				description,
@@ -381,10 +370,17 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 				execution_time,
 				success )
 			VALUES (0,$1,$2,'meta',$3,0,$4,$5,0,true)`,
-			st.schemaName, st.metaTableName,
-		),
-		"0", st.schemaName, m.schemaID, m.userID, time.Now().UTC(),
-	)
+				st.schemaName, st.metaTableName,
+			),
+			"0", st.schemaName, m.schemaID, m.userID, time.Now().UTC(),
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		return err
 	}
@@ -468,6 +464,10 @@ func (m *Migrator) validateDBSchema(st *state) error {
 }
 
 func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error {
+	// TODO: write something to to the schema_version table to indicate
+	// that we are executing a migration. This something will be resolved
+	// after a success.
+
 	tStart := time.Now()
 
 	err := sf.source.ExecuteMigration(st.db, MigrationInfo{
@@ -501,5 +501,24 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 		m.userID, tStart.UTC(), dt,
 	)
 
+	return err
+}
+
+func doTx(db DB, txFunc func(*sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			tx.Rollback()
+			panic(rec)
+		} else if err != nil {
+			tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	err = txFunc(tx)
 	return err
 }
