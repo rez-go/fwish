@@ -424,7 +424,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 
 	var i, rank int32
 	var version, script string
-	var checksum uint32
+	var checksum int32
 	var success bool
 
 	for i = 0; rows.Next(); i++ {
@@ -454,7 +454,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 
 		mig := m.migrations[m.versions[i-1]]
 
-		if mig.checksum != checksum {
+		if mig.checksum != uint32(checksum) {
 			//TODO: ensure the message has enough details
 			return fmt.Errorf("fwish: checksum mismatch for rank %d: %s", i, script)
 		}
@@ -497,7 +497,7 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
 			st.schemaName, st.metaTableName,
 		),
-		rank, sf.versionStr, sf.label, sf.script, sf.checksum,
+		rank, sf.versionStr, sf.label, sf.script, int32(sf.checksum),
 		m.userID, tStart.UTC(), dt,
 	)
 
