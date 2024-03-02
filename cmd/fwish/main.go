@@ -1,6 +1,6 @@
 package main
 
-//TODO: implement this
+// TODO: implement this
 func main() {
 
 }

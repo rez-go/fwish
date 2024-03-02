@@ -1,13 +1,12 @@
 package fwish_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
-	"github.com/pkg/errors"
-
-	"bitbucket.org/exavolt/fwish"
-	sqlsource "bitbucket.org/exavolt/fwish/source/sql"
+	"github.com/rez-go/fwish"
+	sqlsource "github.com/rez-go/fwish/sources/sql"
 )
 
 type sourceConflict struct {

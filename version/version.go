@@ -24,7 +24,6 @@ func (v Version) String() string {
 
 // Parse parses a string and returns a normalized string and a list of
 // int64.
-//
 func Parse(vstr string) (Version, error) {
 	if vstr == "" {
 		return nil, nil
@@ -54,7 +53,7 @@ func Parse(vstr string) (Version, error) {
 
 // SortStrings sort a list of version string.
 //
-//TODO: should we treat 1.0 as equal to 1?
+// TODO: should we treat 1.0 as equal to 1?
 func SortStrings(versions []string) error {
 	if len(versions) == 0 {
 		return nil

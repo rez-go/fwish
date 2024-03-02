@@ -2,19 +2,18 @@ package sql
 
 import (
 	"bufio"
+	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/pkg/errors"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 
-	"bitbucket.org/exavolt/fwish"
+	"github.com/rez-go/fwish"
 )
 
-//TODO: dialect / engine etc.
+// TODO: dialect / engine etc.
 type sqlSourceMeta struct {
 	ID         string
 	Name       string
@@ -53,25 +52,25 @@ func Load(sourceURL string) (fwish.MigrationSource, error) {
 	src := sqlSource{url: sourceURL}
 
 	//TODO: stream the content
-	fd, err := ioutil.ReadFile(
+	fd, err := os.ReadFile(
 		filepath.Join(src.url, "fwish.yaml"),
 	)
 	if err != nil {
 		if _, ok := err.(*os.PathError); !ok {
-			return nil, errors.Wrap(err, "fwish.sql: error opening source meta file")
+			return nil, fmt.Errorf("fwish.sql: error opening source meta file: %w", err)
 		}
 		// Try other name
-		fd, err = ioutil.ReadFile(
+		fd, err = os.ReadFile(
 			filepath.Join(src.url, "schema.yaml"),
 		)
 		if err != nil {
-			return nil, errors.Wrap(err, "fwish.sql: unable to open any source meta file")
+			return nil, fmt.Errorf("fwish.sql: unable to open any source meta file: %w", err)
 		}
 	}
 
 	meta := sqlSourceMeta{}
 	if err := yaml.Unmarshal(fd, &meta); err != nil {
-		return nil, errors.Wrap(err, "fwish.sql: unable to load meta file")
+		return nil, fmt.Errorf("fwish.sql: unable to load meta file: %w", err)
 	}
 
 	src.schemaID = meta.ID
@@ -103,7 +102,7 @@ func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.MigrationInfo) erro
 	//TODO: load all the content, checksum, then execute
 	fh, err := os.Open(filepath.Join(src.url, sm.Script))
 	if err != nil {
-		return errors.Wrap(err, "fwish.sql: unable to load migration file")
+		return fmt.Errorf("fwish.sql: unable to load migration file: %w", err)
 	}
 	defer fh.Close()
 
@@ -121,8 +120,7 @@ func (src *sqlSource) ExecuteMigration(db fwish.DB, sm fwish.MigrationInfo) erro
 	}
 
 	if sm.Checksum != ck.Sum32() {
-		//TODO: more informative message
-		return errors.Errorf("fwish.sql: bad migration file checksum %q", sm.Name)
+		return fmt.Errorf("fwish.sql: bad migration file checksum %q", sm.Name)
 	}
 
 	_, err = db.Exec(script)
@@ -139,9 +137,9 @@ func (src *sqlSource) scanSourceDir() (numFiles int, err error) {
 
 	src.files = nil
 
-	fl, err := ioutil.ReadDir(src.url)
+	fl, err := os.ReadDir(src.url)
 	if err != nil {
-		return 0, errors.Wrap(err, "fwish.sql: unable to read migration directory")
+		return 0, fmt.Errorf("fwish.sql: unable to read migration directory: %w", err)
 	}
 
 	for _, entry := range fl {
@@ -180,7 +178,7 @@ func (src *sqlSource) scanSourceDir() (numFiles int, err error) {
 func (src *sqlSource) checksumSourceFile(filename string) (uint32, error) {
 	fh, err := os.Open(filename)
 	if err != nil {
-		return 0, errors.Wrap(err, "fwish.sql: unable to load migration file")
+		return 0, fmt.Errorf("fwish.sql: unable to load migration file: %w", err)
 	}
 	defer fh.Close()
 

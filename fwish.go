@@ -2,14 +2,14 @@ package fwish
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
-	"github.com/pkg/errors"
 
-	"bitbucket.org/exavolt/fwish/version"
+	"github.com/rez-go/fwish/version"
 )
 
 //TODO: the DB's schemaID is the one with the highest authority. if the
@@ -20,7 +20,6 @@ import (
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
 // implementations, for example, github.com/jmoiron/sqlx .
-//
 type DB interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
@@ -36,7 +35,7 @@ type LogOutputer interface {
 // MigrationInfo holds basic info about a migration obtained from
 // a source.
 //
-//TODO: interface so the source can lazy-checksum
+// TODO: interface so the source can lazy-checksum
 type MigrationInfo struct {
 	Name     string
 	Script   string
@@ -44,7 +43,6 @@ type MigrationInfo struct {
 }
 
 // MigrationSource is an abstraction for migration sources.
-//
 type MigrationSource interface {
 	SchemaID() string
 	SchemaName() string
@@ -78,14 +76,9 @@ type migration struct {
 }
 
 // Migrator is the ..
-//
-//TODO: logger. two types: structured and unstructured. we should support
-// both of them.
-//TODO: make the instance safe for concurrent usage? for example we want
-// to migrate multiple targets.
 type Migrator struct {
 	schemaID   string
-	schemaName string //TODO: any actual use?
+	schemaName string
 	userID     string
 
 	sources    []MigrationSource
@@ -101,7 +94,6 @@ type Migrator struct {
 // The schemaID will be compared to the ID found inside the
 // migration source meta file and the metadata table. The recommended
 // value for schemaID is an UUID or the URI of the application.
-//
 func NewMigrator(schemaID string) (*Migrator, error) {
 	m := &Migrator{
 		schemaID: schemaID,
@@ -111,8 +103,6 @@ func NewMigrator(schemaID string) (*Migrator, error) {
 
 // WithLogger sets non-structured logger. It accepts Logger from Go's
 // built-in package.
-//
-//TODO: logging level
 func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 	m.logger = logger
 	return m
@@ -120,7 +110,6 @@ func (m *Migrator) WithLogger(logger LogOutputer) *Migrator {
 
 // WithUserID sets the user identifier who performed the next migrations.
 // Recommended value is user's email address.
-//
 func (m *Migrator) WithUserID(userID string) *Migrator {
 	m.userID = userID
 	return m
@@ -130,7 +119,6 @@ func (m *Migrator) WithUserID(userID string) *Migrator {
 // schema ID as the migrator.
 //
 // All the migrations from all sources will be compiled.
-//
 func (m *Migrator) AddSource(src MigrationSource) error {
 	//TODO: currently, if we failed while adding migration, the state
 	// of migrator is undefined, we should prevent undefined state.
@@ -144,7 +132,7 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 	}
 	id := src.SchemaID()
 	if m.schemaID != "" {
-		if id == "" || id != m.schemaID { // case-insensitive / case-fold?
+		if id == "" || id != m.schemaID {
 			return ErrSchemaIDMismatch
 		}
 	} else {
@@ -153,7 +141,7 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 
 	ml, err := src.Migrations()
 	if err != nil {
-		return errors.Wrap(err, "fwish: unable to get source's migrations")
+		return fmt.Errorf("fwish: unable to get source's migrations: %w", err)
 	}
 
 	if m.migrations == nil {
@@ -169,12 +157,12 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 		mn := mi.Name
 		//TODO: support for repeatables
 		if !strings.HasPrefix(mn, migrationVersionedPrefix) {
-			return errors.Errorf("fwish: migration name %q has invalid prefix", mn)
+			return fmt.Errorf("fwish: migration name %q has invalid prefix", mn)
 		}
 		idx := strings.Index(mn, migrationVersionSeparator)
 		if idx == -1 {
 			//TODO: could we have name without the label part?
-			return errors.Errorf("fwish: invalid migration name %q", mn)
+			return fmt.Errorf("fwish: invalid migration name %q", mn)
 		}
 		vstr := mn[:idx]
 		//TODO: proper label processing
@@ -184,7 +172,7 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 
 		vstr = vstr[len(migrationVersionedPrefix):]
 		if vstr == "" {
-			return errors.Errorf("fwish: migration name %q has invalid version part", mn)
+			return fmt.Errorf("fwish: migration name %q has invalid version part", mn)
 		}
 
 		vints, err := version.Parse(vstr)
@@ -194,12 +182,12 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 		vstr = vints.String()
 		if vstr == "" {
 			// This would be an internal error
-			return errors.Errorf("fwish: migration %q has empty version", mn)
+			return fmt.Errorf("fwish: migration %q has empty version", mn)
 		}
 
 		if cv, ok := m.migrations[vstr]; ok {
 			//TODO: test case for this
-			return errors.Errorf("fwish: version %q conflict (%q, %q)", vstr, cv.name, mn)
+			return fmt.Errorf("fwish: version %q conflict (%q, %q)", vstr, cv.name, mn)
 		}
 		m.migrations[vstr] = migration{
 			versionStr:  vstr,
@@ -232,8 +220,8 @@ func (m *Migrator) SchemaID() string { return m.schemaID }
 // found inside the meta file. The schema name corresponds the
 // Postgres database schema name.
 //
-//TODO: allow override meta table name too?
-//TODO: MigrateToRank, and MigrateToVersion ?
+// TODO: allow override meta table name too?
+// TODO: MigrateToRank, and MigrateToVersion ?
 func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	//TODO: validate the parameters
 	// - we should use regex for schemaName. [A-Za-z0-9_]
@@ -290,7 +278,6 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 }
 
 // Status returns whether all the migrations have been applied.
-//
 func (m *Migrator) Status(db DB) (diff int, err error) {
 	// if err := m.ensureSourceFilesScanned(); err != nil {
 	// 	return 0, err
@@ -318,7 +305,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	// version; we'll need it to limit our support anyway)
 	// Let's try to create the schema away.
 	_, err := st.db.Exec(fmt.Sprintf(
-		`CREATE SCHEMA %s`,
+		`CREATE SCHEMA IF NOT EXISTS %s`,
 		st.schemaName,
 	))
 	if err != nil {
@@ -348,13 +335,13 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	if err != sql.ErrNoRows {
 		pqErr, ok := err.(*pq.Error)
 		if !ok {
-			return errors.Wrap(err, "fwish: unexpected error type")
+			return fmt.Errorf("fwish: unexpected error type: %w", err)
 		}
 
 		// 42P01: undefined_table
 		if pqErr.Code != "42P01" ||
 			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metaTableName+`"`) {
-			return fmt.Errorf("fwish: unexpected error (%v)", pqErr)
+			return fmt.Errorf("fwish: unexpected error: %w", pqErr)
 		}
 
 		_, err = st.db.Exec(fmt.Sprintf(
@@ -469,7 +456,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 
 		if mig.checksum != checksum {
 			//TODO: ensure the message has enough details
-			return errors.Errorf("fwish: checksum mismatch for rank %d: %s", i, script)
+			return fmt.Errorf("fwish: checksum mismatch for rank %d: %s", i, script)
 		}
 
 		// check other stuff?

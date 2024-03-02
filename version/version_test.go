@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"bitbucket.org/exavolt/fwish/version"
+	"github.com/rez-go/fwish/version"
 )
 
 func TestParse(t *testing.T) {

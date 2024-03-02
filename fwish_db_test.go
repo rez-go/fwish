@@ -5,10 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jmoiron/sqlx"
-
-	"bitbucket.org/exavolt/fwish"
-	sqlsource "bitbucket.org/exavolt/fwish/source/sql"
+	"github.com/rez-go/fwish"
+	sqlsource "github.com/rez-go/fwish/sources/sql"
 )
 
 //TODO:
@@ -96,7 +94,7 @@ func TestBasicSQLX(t *testing.T) {
 	}
 
 	// The only difference
-	db, err := sqlx.Open("postgres", testDBDSN)
+	db, err := sql.Open("postgres", testDBDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
