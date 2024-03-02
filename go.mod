@@ -1,6 +1,6 @@
 module github.com/rez-go/fwish
 
-go 1.22.0
+go 1.21
 
 require (
 	github.com/lib/pq v1.10.9
