@@ -464,24 +464,11 @@ func (m *Migrator) validateDBSchema(st *state) error {
 }
 
 func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error {
-	// TODO: write something to to the schema_version table to indicate
-	// that we are executing a migration. This something will be resolved
-	// after a success.
-
 	tStart := time.Now()
 
-	err := sf.source.ExecuteMigration(st.db, MigrationInfo{
-		Name:     sf.name,
-		Script:   sf.script,
-		Checksum: sf.checksum,
-	})
-	if err != nil {
-		return err
-	}
-
-	dt := time.Since(tStart) / time.Millisecond
-
-	_, err = st.db.Exec(
+	// Insert the row first but with success flag set as false. This is
+	// so that we will know when a migration was failed.
+	_, err := st.db.Exec(
 		fmt.Sprintf(
 			`INSERT INTO %s.%s (
 				installed_rank,
@@ -494,11 +481,39 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 				installed_on,
 				execution_time,
 				success )
-			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,true)`,
+			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,false)`,
 			st.schemaName, st.metaTableName,
 		),
 		rank, sf.versionStr, sf.label, sf.script, int32(sf.checksum),
-		m.userID, tStart.UTC(), dt,
+		m.userID, tStart.UTC(), 0,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = sf.source.ExecuteMigration(st.db, MigrationInfo{
+		Name:     sf.name,
+		Script:   sf.script,
+		Checksum: sf.checksum,
+	})
+	if err != nil {
+		return err
+	}
+
+	dt := time.Since(tStart) / time.Millisecond
+
+	// Update the row to indicate that it's was a success.
+	_, err = st.db.Exec(
+		fmt.Sprintf(
+			`UPDATE %s.%s
+				SET (
+					execution_time,
+					success )
+				= ($1,true)
+				WHERE installed_rank=$2 AND success IS FALSE`,
+			st.schemaName, st.metaTableName,
+		),
+		dt, rank,
 	)
 
 	return err
