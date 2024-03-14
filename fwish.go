@@ -12,6 +12,11 @@ import (
 	"github.com/rez-go/fwish/version"
 )
 
+const (
+	SchemaNameDefault    = "public"
+	MetatableNameDefault = "schema_version"
+)
+
 //TODO: the DB's schemaID is the one with the highest authority. if the
 // DB has it, the migrator and the source must provide matching schema ids.
 //TODO: consider utilizing context.Context
@@ -61,8 +66,7 @@ var (
 type state struct {
 	db            DB
 	schemaName    string
-	metaTableName string
-	validated     bool
+	metatableName string
 	installedRank int32
 }
 
@@ -162,11 +166,9 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 		}
 		idx := strings.Index(mn, migrationVersionSeparator)
 		if idx == -1 {
-			//TODO: could we have name without the label part?
 			return fmt.Errorf("fwish: invalid migration name %q", mn)
 		}
 		vstr := mn[:idx]
-		//TODO: proper label processing
 		label := strings.TrimSpace(
 			strings.Replace(
 				mn[idx+len(migrationVersionSeparator):], "_", " ", -1))
@@ -231,19 +233,28 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		schemaName = m.schemaName
 	}
 	if schemaName == "" {
-		schemaName = "public"
+		schemaName = SchemaNameDefault
 	}
-	st := &state{db, schemaName, "schema_version", false, -1}
+	st := &state{db, schemaName, MetatableNameDefault, -1}
 
 	var searchPath string
 	err = st.db.QueryRow("SHOW search_path").Scan(&searchPath)
 	if err != nil {
 		return 0, err
 	}
+
 	_, err = st.db.Exec("SET search_path TO " + st.schemaName)
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		_, err = st.db.Exec("SET search_path TO " + searchPath)
+		if err != nil {
+			if logger := m.logger; logger != nil {
+				logger.Output(2, "SET search_path returned error: "+err.Error())
+			}
+		}
+	}()
 
 	err = m.validateDBSchema(st)
 	if err != nil {
@@ -257,7 +268,7 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		}
 	}
 
-	//TODO: use Tx
+	// All in a Tx?
 	for i := int(st.installedRank); i < len(m.versions); i++ {
 		sf := m.migrations[m.versions[i]]
 		if m.logger != nil {
@@ -274,11 +285,12 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		num++
 	}
 
-	_, err = st.db.Exec("SET search_path TO " + searchPath)
-	return num, err
+	return num, nil
 }
 
 // Status returns whether all the migrations have been applied.
+//
+// TODO: it should also report if there's any failing migration.
 func (m *Migrator) Status(db DB) (diff int, err error) {
 	// if err := m.ensureSourceFilesScanned(); err != nil {
 	// 	return 0, err
@@ -290,11 +302,6 @@ func (m *Migrator) Status(db DB) (diff int, err error) {
 }
 
 func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
-	// if st.schemaInit {
-	// 	return nil
-	// }
-	// st.schemaInit = true
-
 	err := doTx(st.db, func(tx *sql.Tx) error {
 		//TODO: if the meta table does not exist or there's no revision but
 		// the schema already has other tables, we should return error.
@@ -331,7 +338,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 			success boolean NOT NULL,
 			CONSTRAINT %s_pk PRIMARY KEY (installed_rank)
 		)`,
-			st.schemaName, st.metaTableName, st.metaTableName,
+			st.schemaName, st.metatableName, st.metatableName,
 		))
 		if err != nil {
 			return err
@@ -341,7 +348,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 
 		err = tx.QueryRow(fmt.Sprintf(
 			`SELECT script FROM %s.%s WHERE installed_rank=0`,
-			st.schemaName, st.metaTableName,
+			st.schemaName, st.metatableName,
 		)).Scan(&idstr)
 		if err == nil {
 			if idstr != m.schemaID {
@@ -370,7 +377,7 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 				execution_time,
 				success )
 			VALUES (0,$1,$2,'meta',$3,0,$4,$5,0,true)`,
-				st.schemaName, st.metaTableName,
+				st.schemaName, st.metatableName,
 			),
 			"0", st.schemaName, m.schemaID, m.userID, time.Now().UTC(),
 		)
@@ -391,7 +398,6 @@ func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 }
 
 func (m *Migrator) validateDBSchema(st *state) error {
-	st.validated = false //
 	st.installedRank = -1
 
 	//TODO: lazy-load source migration checksums
@@ -399,7 +405,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 	rows, err := st.db.Query(fmt.Sprintf(
 		`SELECT installed_rank, version, script, checksum, success
 		FROM %s.%s ORDER BY installed_rank`,
-		st.schemaName, st.metaTableName,
+		st.schemaName, st.metatableName,
 	))
 	if err != nil {
 		pqErr, ok := err.(*pq.Error)
@@ -408,13 +414,9 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		}
 		// 42P01: undefined_table
 		if pqErr.Code != "42P01" ||
-			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metaTableName+`"`) {
+			!strings.Contains(pqErr.Message, `"`+st.schemaName+`.`+st.metatableName+`"`) {
 			return err
 		}
-		// Set the status as validated eventhough the schema has not been
-		// initialized. Use installedRank to check if the schema has been
-		// initialized (>= 0 means initialized)
-		st.validated = true
 		return nil
 	}
 
@@ -428,7 +430,9 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		if err != nil {
 			return err
 		}
-		//TODO: validate
+
+		//TODO: validate things
+
 		if rank != i {
 			// class: schema consistency
 			return errors.New("fwish: insequential installed_rank")
@@ -451,7 +455,6 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		mig := m.migrations[m.versions[i-1]]
 
 		if mig.checksum != uint32(checksum) {
-			//TODO: ensure the message has enough details
 			return fmt.Errorf("fwish: checksum mismatch for rank %d: %s", i, script)
 		}
 
@@ -467,7 +470,7 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 	tStart := time.Now()
 
 	// Insert the row first but with success flag set as false. This is
-	// so that we will know when a migration was failed.
+	// so that we will know when a migration has failed.
 	_, err := st.db.Exec(
 		fmt.Sprintf(
 			`INSERT INTO %s.%s (
@@ -482,7 +485,7 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 				execution_time,
 				success )
 			VALUES ($1,$2,$3,'SQL',$4,$5,$6,$7,$8,false)`,
-			st.schemaName, st.metaTableName,
+			st.schemaName, st.metatableName,
 		),
 		rank, sf.versionStr, sf.label, sf.script, int32(sf.checksum),
 		m.userID, tStart.UTC(), 0,
@@ -511,7 +514,7 @@ func (m *Migrator) executeMigration(st *state, rank int32, sf *migration) error 
 					success )
 				= ($1,true)
 				WHERE installed_rank=$2 AND success IS FALSE`,
-			st.schemaName, st.metaTableName,
+			st.schemaName, st.metatableName,
 		),
 		dt, rank,
 	)
