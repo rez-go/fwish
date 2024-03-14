@@ -290,7 +290,7 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 
 // Status returns whether all the migrations have been applied.
 //
-// TODO: it should also report if there's any failing migration.
+// TODO: return a struct.
 func (m *Migrator) Status(db DB) (diff int, err error) {
 	// if err := m.ensureSourceFilesScanned(); err != nil {
 	// 	return 0, err

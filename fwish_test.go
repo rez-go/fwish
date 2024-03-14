@@ -45,7 +45,7 @@ func TestSchemaIDMatchSourceProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := sqlsource.Load("./test-data/basic")
+	src, err := sqlsource.LoadDir("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSchemaIDMismatchSourceProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := sqlsource.Load("./test-data/basic")
+	src, err := sqlsource.LoadDir("./test-data/basic")
 	if err != nil {
 		t.Fatal(err)
 	}

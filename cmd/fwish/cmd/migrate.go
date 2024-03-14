@@ -41,7 +41,7 @@ var migrateCmd = &cobra.Command{
 		}
 		mg.WithLogger(logger)
 		mg.WithUserID(username)
-		src, err := sqlsource.Load(migrateSource)
+		src, err := sqlsource.LoadDir(migrateSource)
 		if err != nil {
 			panic(err)
 		}
