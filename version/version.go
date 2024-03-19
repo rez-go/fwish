@@ -52,8 +52,6 @@ func Parse(vstr string) (Version, error) {
 }
 
 // SortStrings sort a list of version string.
-//
-// TODO: should we treat 1.0 as equal to 1?
 func SortStrings(versions []string) error {
 	if len(versions) == 0 {
 		return nil

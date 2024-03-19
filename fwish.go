@@ -17,10 +17,8 @@ const (
 	MetatableNameDefault = "schema_version"
 )
 
-//TODO: the DB's schemaID is the one with the highest authority. if the
+// NOTE: the DB's schemaID is the one with the highest authority. if the
 // DB has it, the migrator and the source must provide matching schema ids.
-//TODO: consider utilizing context.Context
-//TODO: version assertion
 
 // DB is an interface which can be fulfilled by a sql.DB instance.
 // We have this abstraction so that people can use stdlib-compatible
@@ -53,7 +51,7 @@ type MigrationSource interface {
 	SchemaID() string
 	SchemaName() string
 	Migrations() ([]MigrationInfo, error)
-	ExecuteMigration(db DB, migration MigrationInfo) error //TODO: use context and Tx
+	ExecuteMigration(db DB, migration MigrationInfo) error
 }
 
 var (
@@ -126,7 +124,7 @@ func (m *Migrator) WithUserID(userID string) *Migrator {
 // All the migrations from all sources will be compiled.
 func (m *Migrator) AddSource(src MigrationSource) error {
 	//TODO: currently, if we failed while adding migration, the state
-	// of migrator is undefined, we should prevent undefined state.
+	// of migrator will be undefined, we should prevent undefined state.
 	// we first validate all the migrations first then apply the
 	// apply the changes after all have been validated.
 
@@ -157,10 +155,7 @@ func (m *Migrator) AddSource(src MigrationSource) error {
 	migrationVersionedPrefix := "V"
 
 	for _, mi := range ml {
-		//TODO: validate things!
-		// version string is [0-9\.]
 		mn := mi.Name
-		//TODO: support for repeatables
 		if !strings.HasPrefix(mn, migrationVersionedPrefix) {
 			return fmt.Errorf("fwish: migration name %q has invalid prefix", mn)
 		}
@@ -222,9 +217,6 @@ func (m *Migrator) SchemaID() string { return m.schemaID }
 // The schemaName parameter will be used to override the schema name
 // found inside the meta file. The schema name corresponds the
 // Postgres database schema name.
-//
-// TODO: allow override meta table name too?
-// TODO: MigrateToRank, and MigrateToVersion ?
 func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	//TODO: validate the parameters
 	// - we should use regex for schemaName. [A-Za-z0-9_]
@@ -303,9 +295,9 @@ func (m *Migrator) Status(db DB) (diff int, err error) {
 
 func (m *Migrator) ensureDBSchemaInitialized(st *state) error {
 	err := doTx(st.db, func(tx *sql.Tx) error {
-		//TODO: if the meta table does not exist or there's no revision but
+		// NOTE: if the meta table does not exist or there's no revision but
 		// the schema already has other tables, we should return error.
-		//TODO: if the DB has no schema meta but already has entries,
+		// NOTE: if the DB has no schema meta but already has entries,
 		// we assume that it's a from fw. if the migrator has valid
 		// schemaID, set the meta, otherwise we don't bother with schemaID.
 
@@ -430,8 +422,6 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		if err != nil {
 			return err
 		}
-
-		//TODO: validate things
 
 		if rank != i {
 			// class: schema consistency

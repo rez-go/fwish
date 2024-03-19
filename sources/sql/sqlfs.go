@@ -61,7 +61,6 @@ func (src *sqlFSSource) Migrations() ([]fwish.MigrationInfo, error) {
 
 func (src *sqlFSSource) ExecuteMigration(db fwish.DB, sm fwish.MigrationInfo) error {
 	//TODO: ensure that the it's our migration
-	//TODO: load all the content, checksum, then execute
 	fh, err := src.fs.Open(sm.Script)
 	if err != nil {
 		return fmt.Errorf("fwish.sql: unable to load migration file: %w", err)
@@ -114,7 +113,6 @@ func (src *sqlFSSource) scanSourceDir() (numFiles int, err error) {
 			continue
 		}
 
-		//TODO: we can optimize this by using goroutines
 		cksum, err := src.checksumSourceFile(fname)
 		if err != nil {
 			return 0, err

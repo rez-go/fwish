@@ -12,7 +12,6 @@ func LoadDir(dirPath string) (fwish.MigrationSource, error) {
 	return LoadFS(fs)
 }
 
-// TODO: dialect / engine etc.
 type sqlSourceMeta struct {
 	ID         string
 	Name       string
