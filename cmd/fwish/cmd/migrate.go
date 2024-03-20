@@ -43,6 +43,9 @@ var migrateCmd = &cobra.Command{
 		mg.WithUserID(username)
 		src, err := sqlsource.LoadDir(migrateSource)
 		if err != nil {
+			if err == fwish.ErrSchemaIndexFileNotFound {
+				logger.Fatal("Source does not contain fwish.yaml file")
+			}
 			panic(err)
 		}
 		err = mg.AddSource(src)

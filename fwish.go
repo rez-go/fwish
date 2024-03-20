@@ -58,6 +58,10 @@ var (
 	// ErrSchemaIDMismatch is returned when the provided ID doesn't match
 	// schema's ID.
 	ErrSchemaIDMismatch = errors.New("fwish: schema ID mismatch")
+
+	// ErrSchemaIndexFileNotFound is returned when a migration source
+	// does not contain the fwish.yaml file
+	ErrSchemaIndexFileNotFound = errors.New("fwish: schema index file not found")
 )
 
 // Might want store the tx in here too

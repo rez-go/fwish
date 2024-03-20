@@ -21,9 +21,14 @@ type sqlFSSource struct {
 	migrations []fwish.MigrationInfo
 }
 
-func LoadFS(fs fs.FS) (fwish.MigrationSource, error) {
-	fh, err := fs.Open("fwish.yaml")
+func LoadFS(fs_ fs.FS) (fwish.MigrationSource, error) {
+	fh, err := fs_.Open("fwish.yaml")
 	if err != nil {
+		if pathErr, ok := err.(*fs.PathError); ok && pathErr != nil {
+			if pathErr.Err == fs.ErrNotExist {
+				return nil, fwish.ErrSchemaIndexFileNotFound
+			}
+		}
 		return nil, fmt.Errorf("fwish.sql: unable to open schema index file: %w", err)
 	}
 	defer fh.Close()
@@ -37,7 +42,7 @@ func LoadFS(fs fs.FS) (fwish.MigrationSource, error) {
 	return &sqlFSSource{
 		schemaID:   idx.ID,
 		schemaName: idx.Name,
-		fs:         fs,
+		fs:         fs_,
 	}, nil
 }
 
