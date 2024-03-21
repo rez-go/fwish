@@ -62,6 +62,8 @@ var (
 	// ErrSchemaIndexFileNotFound is returned when a migration source
 	// does not contain the fwish.yaml file
 	ErrSchemaIndexFileNotFound = errors.New("fwish: schema index file not found")
+
+	ErrSchemaHasFailedMigration = errors.New("fwish: schema has failed migration")
 )
 
 // Might want store the tx in here too
@@ -236,15 +238,15 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 	var searchPath string
 	err = st.db.QueryRow("SHOW search_path").Scan(&searchPath)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	_, err = st.db.Exec("SET search_path TO " + st.schemaName)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 	defer func() {
-		_, err = st.db.Exec("SET search_path TO " + searchPath)
+		_, err := st.db.Exec("SET search_path TO " + searchPath)
 		if err != nil {
 			if logger := m.logger; logger != nil {
 				logger.Output(2, "SET search_path returned error: "+err.Error())
@@ -254,13 +256,13 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 
 	err = m.validateDBSchema(st)
 	if err != nil {
-		return 0, err
+		return -1, err
 	}
 
 	if st.installedRank == -1 {
 		err = m.ensureDBSchemaInitialized(st)
 		if err != nil {
-			return 0, err
+			return -1, err
 		}
 	}
 
@@ -276,7 +278,7 @@ func (m *Migrator) Migrate(db DB, schemaName string) (num int, err error) {
 		}
 		err = m.executeMigration(st, int32(i+1), &sf)
 		if err != nil {
-			return 0, err
+			return -1, err
 		}
 		num++
 	}
@@ -415,6 +417,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		}
 		return nil
 	}
+	defer rows.Close()
 
 	var i, rank int32
 	var version, script string
@@ -433,8 +436,7 @@ func (m *Migrator) validateDBSchema(st *state) error {
 		}
 
 		if !success {
-			// what to do?
-			panic("DB has failed migration")
+			return ErrSchemaHasFailedMigration
 		}
 
 		if int(i) > len(m.versions) {
